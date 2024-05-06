@@ -504,7 +504,7 @@ if __name__ == "__main__":
 
     print('Transcribing...')
     s = time.monotonic()
-    with futures.ThreadPoolExecutor(max_workers=threads) as p:
+    with futures.ThreadPoolExecutor(max_workers=max(threads, 4)) as p:
         r = []
         for i in range(len(streams)):
             for j, v in enumerate(streams[i][2]):
