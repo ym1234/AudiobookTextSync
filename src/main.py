@@ -20,6 +20,7 @@ if is_notebook():
 else:
     from tqdm import tqdm, trange
 
+import functools
 from functools import partialmethod
 from itertools import groupby, takewhile
 from dataclasses import dataclass
@@ -502,14 +503,21 @@ if __name__ == "__main__":
 
     nopend = args.pop('nopend_punctuations')
 
+    def whatever(model, device, quantize, local_only, threads, cache, temperature, x):
+        model = loader(model, device, quantize, local_only, threads)
+        return x.transcribe(model, cache, temperature=temperature, **args)
+
+    test2 = functools.partial(whatever,  model, device, quantize, local_only, threads, cache, temperature)
+
     print('Transcribing...')
     s = time.monotonic()
-    with futures.ThreadPoolExecutor(max_workers=threads) as p:
+    with futures.ProcessPoolExecutor(max_workers=threads) as p:
         r = []
         for i in range(len(streams)):
             for j, v in enumerate(streams[i][2]):
-                r.append(p.submit(lambda x: x.transcribe(loader(model, device, quantize, local_only, threads), cache, temperature=temperature, **args), v))
-        futures.wait(r)
+                r.append(p.submit(test2, v))
+        h, _ = futures.wait(r)
+        print(list(h)[0].result())
     print(f"Transcribing took: {time.monotonic()-s:.2f}s")
 
     print('Fuzzy matching chapters...')
