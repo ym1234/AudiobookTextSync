@@ -371,6 +371,20 @@ def faster_transcribe(self, audio, **args):
 
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
+
+def load_faster(model, device, quantize, local_only, threads):
+    model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
+    model.transcribe2 = model.transcribe
+    model.transcribe = MethodType(faster_transcribe, model)
+    return model
+    # pass
+
+def load_normal(model, device, quantize, local_only, threads):
+    model = whisper.load_model(model).to(device)
+    if quantize and device != 'cpu':
+        model = model.half()
+    return model
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     parser.add_argument( "--audio", nargs="+", required=True, help="list of audio files to process (in the correct order)")
@@ -443,14 +457,7 @@ if __name__ == "__main__":
     faster_whisper = args.pop('faster_whisper')
     local_only = args.pop('local_only')
     quantize = args.pop("quantize")
-    if faster_whisper:
-        model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
-        model.transcribe2 = model.transcribe
-        model.transcribe = MethodType(faster_transcribe, model)
-    else:
-        model = whisper.load_model(model).to(device)
-        if quantize and device != 'cpu':
-            model = model.half()
+    loader = load_faster if faster_whisper else load_normal
 
     if args.pop('dynamic_quantization') and device == "cpu" and not faster_whisper:
         ptdq_linear(model)
@@ -501,7 +508,7 @@ if __name__ == "__main__":
         r = []
         for i in range(len(streams)):
             for j, v in enumerate(streams[i][2]):
-                r.append(p.submit(lambda x: x.transcribe(model, cache, temperature=temperature, **args), v))
+                r.append(p.submit(lambda x: x.transcribe(loader(model, device, quantize, local_only, threads), cache, temperature=temperature, **args), v))
         futures.wait(r)
     print(f"Transcribing took: {time.monotonic()-s:.2f}s")
 
