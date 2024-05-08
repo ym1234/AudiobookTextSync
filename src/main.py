@@ -374,7 +374,7 @@ def faster_transcribe(self, audio, **args):
 
 
 def load_faster(model, device, quantize, local_only, threads):
-    model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
+    model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=8, cpu_threads=8)
     model.transcribe2 = model.transcribe
     model.transcribe = MethodType(faster_transcribe, model)
     return model
