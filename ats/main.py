@@ -37,8 +37,8 @@ import numpy as np
 import whisper
 
 from ats import align
-from huggingface import modify_model
-from quantization import ptdq_linear
+from ats.huggingface import modify_model
+from ats.quantization import ptdq_linear
 from faster_whisper import WhisperModel
 
 import ffmpeg
