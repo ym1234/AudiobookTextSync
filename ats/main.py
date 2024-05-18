@@ -2,7 +2,7 @@ import os
 import argparse
 from pprint import pprint
 from types import MethodType
-from lang import get_lang
+from ats.lang import get_lang
 from wcwidth import wcswidth
 
 def is_notebook() -> bool:
@@ -36,7 +36,7 @@ import torch
 import numpy as np
 import whisper
 
-import align
+from ats import align
 from huggingface import modify_model
 from quantization import ptdq_linear
 from faster_whisper import WhisperModel
