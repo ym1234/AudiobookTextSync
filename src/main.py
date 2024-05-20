@@ -23,7 +23,7 @@ else:
     from tqdm import tqdm, trange
 
 import mimetypes
-from functools import partialmethod, reduce
+from functools import partial, partialmethod, reduce
 from itertools import groupby, takewhile, chain
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,6 +306,28 @@ def faster_transcribe(self, audio, **args):
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
+def load_model(_model, device, threads, faster_whisper, local_only, quantize, fast_decoder, overlap, batches, dq):
+    global model
+    if faster_whisper:
+        model = WhisperModel(_model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=1)
+        model.transcribe2 = model.transcribe
+        model.transcribe = MethodType(faster_transcribe, model)
+    else:
+        model = whisper.load_model(_model, device)
+        if quantize and device != 'cpu': # TODO fp16 to arguments
+            model = model.half()
+        elif dq:
+            ptdq_linear(model)
+
+        if fast_decoder:
+            args["overlap"] = overlap
+            args["batches"] = batches
+            modify_model(model)
+
+def transcribe3(c, temperature, **args):
+    global model
+    return TranscribedAudioStream.from_map(c, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args))
+
 def main():
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     parser.add_argument("--audio", nargs="+", type=Path, required=True, help="list of audio files to process (in the correct order)")
@@ -380,22 +402,23 @@ def main():
     faster_whisper, local_only, quantize = args.pop('faster_whisper'), args.pop('local_only'), args.pop('quantize')
     fast_decoder, overlap, batches = args.pop('fast_decoder'), args.pop("fast_decoder_overlap"), args.pop("fast_decoder_batches")
     dq = args.pop('dynamic_quantization')
-    if faster_whisper:
-        model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
-        model.transcribe2 = model.transcribe
-        model.transcribe = MethodType(faster_transcribe, model)
-    else:
-        model = whisper.load_model(model, device)
-        args['fp16'] = quantize and device != 'cpu'
-        if args['fp16']:
-            model = model.half()
-        elif dq:
-            ptdq_linear(model)
+    load_model_args = (model, device, threads, faster_whisper, local_only, quantize, fast_decoder, overlap, batches, dq)
+    # if faster_whisper:
+    #     model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
+    #     model.transcribe2 = model.transcribe
+    #     model.transcribe = MethodType(faster_transcribe, model)
+    # else:
+    #     model = whisper.load_model(model, device)
+    #     args['fp16'] = quantize and device != 'cpu'
+    #     if args['fp16']:
+    #         model = model.half()
+    #     elif dq:
+    #         ptdq_linear(model)
 
-        if fast_decoder:
-            args["overlap"] = overlap
-            args["batches"] = batches
-            modify_model(model)
+    #     if fast_decoder:
+    #         args["overlap"] = overlap
+    #         args["batches"] = batches
+    #         modify_model(model)
 
     temperature = args.pop("temperature")
     if (increment := args.pop("temperature_increment_on_fallback")) is not None:
@@ -435,7 +458,7 @@ def main():
     # Trash code
     # TODO: This really doesn't have much of a perf improvement
     # Get rid of it and update faster-whisper to support batching
-    with futures.ThreadPoolExecutor(max_workers=threads) as p:
+    with futures.ProcessPoolExecutor(max_workers=threads, initializer=load_model, initargs=load_model_args) as p:
         in_cache = []
         for i, a in enumerate(audio):
             for j, c in enumerate(a.chapters):
@@ -447,14 +470,14 @@ def main():
             # TODO ask the user for which ones to override
             overwrite = set()
 
-        fs = [], []
+        fs = []
         for i, a in enumerate(audio):
             cf = []
             for j, c in enumerate(a.chapters):
                 if (i, j) not in overwrite and (t := cache.get(a.path.name, c.id)):
-                    l = lambda c=c, t=t: TranscribedAudioStream.from_map(c, t)
+                    l = partial(TranscribedAudioStream.from_map, c, t)
                 else:
-                    l = lambda c=c: TranscribedAudioStream.from_map(c, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args))
+                    l = partial(transcribe3, c, temperature, **args)
                 cf.append(p.submit(l))
             fs.append(cf)
 
