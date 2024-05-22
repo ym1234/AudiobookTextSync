@@ -345,7 +345,7 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
             with tempfile.NamedTemporaryFile(mode="w", suffix='.srt') as f:
                 write_srt(segments, f)
                 cmd = [alass_path, *['-'+h for h in alass_args], f.name, str(t.path), str(output_dir / (a.path.stem + ''.join(t.path.suffixes)))]
-                print(' '.join(cmd))
+                tqdm.write(' '.join(cmd))
                 try:
                     subprocess.run(cmd)
                 except subprocess.CalledProcessError as e:
