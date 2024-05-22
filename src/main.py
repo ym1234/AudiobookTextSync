@@ -421,7 +421,7 @@ def main():
     alass_path, alass_args, alass_sort = args.pop('alass_path'), args.pop('alass_args'), args.pop('alass_sort')
     if args.pop('alass'):
         alass(output_dir, alass_path, alass_args, alass_sort, args)
-        exit(0)
+        return
 
     model, device = args.pop("model"), args.pop('device')
     if device == 'cuda' and not torch.cuda.is_available():
