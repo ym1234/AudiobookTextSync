@@ -344,7 +344,7 @@ def alass(output_dir, alass_path, alass_args, args):
                 print(' '.join(cmd))
                 try:
                     subprocess.run(cmd)
-                except CalledProcessError as e:
+                except subprocess.CalledProcessError as e:
                     raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
 
 def main():
