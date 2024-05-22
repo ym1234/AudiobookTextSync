@@ -322,10 +322,10 @@ def parse_indices(s, l):
 
 
 def alass(output_dir, alass_path, alass_args, alass_sort, args):
-    audio = natsorted(args.pop('audio')) if alass_sort else args.pop('audio')
-    text = natsorted(args.pop('text')) if alass_sort else args.pop('text')
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in audio))
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in text))
+    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in args.pop('audio')))
+    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+    audio = natsorted(audio, lambda x: x.path.name) if alass_sort else audio
+    text = natsorted(text, lambda x: x.path.name) if alass_sort else text
     if not all(isinstance(t, SubFile) for t in text):
         print('--alass inputs should be subtitle files')
         return

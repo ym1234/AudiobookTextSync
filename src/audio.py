@@ -73,7 +73,7 @@ class AudioFile:
             for f in files:
                 p = Path(root) / f
                 t, enc = mimetypes.guess_type(p)
-                if t.split('/', 1)[0] in mt:
+                if p.suffix != ".ass" and t is not None and t.split('/', 1)[0] in mt:
                     yield cls.from_file(p, track, whole)
 
 @dataclass(eq=True, frozen=True)
