@@ -2,6 +2,7 @@ import os
 import argparse
 import subprocess
 import tempfile
+from natsort import natsorted
 from pprint import pprint
 from types import MethodType
 from lang import get_lang
@@ -320,9 +321,11 @@ def parse_indices(s, l):
     return r
 
 
-def alass(output_dir, alass_path, alass_args, args):
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in args.pop('audio')))
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+def alass(output_dir, alass_path, alass_args, alass_sort, args):
+    audio = natsorted(args.pop('audio')) if alass_sort else args.pop('audio')
+    text = natsorted(args.pop('text')) if alass_sort else args.pop('text')
+    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in audio))
+    text = list(chain.from_iterable(TextFile.from_dir(f) for f in text))
     if not all(isinstance(t, SubFile) for t in text):
         print('--alass inputs should be subtitle files')
         return
@@ -362,6 +365,7 @@ def main():
     parser.add_argument("--alass", default=False, help="Use vad+alass to realign, inputs need to be in-order, this is temporary until I figure out something better (implies --whole)", action=argparse.BooleanOptionalAction)
     parser.add_argument("--alass-path", default='alass', help="path to alass")
     parser.add_argument("--alass-args", default=['O0'], nargs="+", help="additional arguments to alass (pass without the dash, eg: O1)")
+    parser.add_argument("--alass-sort", default=True, help="Sort the files (natural sort) before grouping", action=argparse.BooleanOptionalAction)
 
     parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
     parser.add_argument("--overwrite", default=False,  help="Overwrite any destination files", action=argparse.BooleanOptionalAction)
@@ -413,9 +417,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     output_format = args.pop('output_format')
 
-    alass_path, alass_args = args.pop('alass_path'), args.pop('alass_args')
+    alass_path, alass_args, alass_sort = args.pop('alass_path'), args.pop('alass_args'), args.pop('alass_sort')
     if args.pop('alass'):
-        alass(output_dir, alass_path, alass_args, args)
+        alass(output_dir, alass_path, alass_args, alass_sort, args)
         exit(0)
 
     model, device = args.pop("model"), args.pop('device')
