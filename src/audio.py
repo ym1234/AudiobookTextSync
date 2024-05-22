@@ -19,7 +19,7 @@ class AudioStream:
             data, _ = self.stream.output('-', format='s16le', acodec='pcm_s16le', ac=1, ar='16k', **self.args).run(quiet=True, input='')
             return np.frombuffer(data, np.int16).astype(np.float32) / 32768.0
         except ffmpeg.Error as e:
-            raise Exception(e.stderr.decode('utf8'))
+            raise Exception(e.stderr.decode('utf8')) from e
 
 @dataclass(eq=True, frozen=True)
 class AudioFile:
@@ -37,14 +37,14 @@ class AudioFile:
 
         if track is not None:
             langcode = pycountry.languages.get(alpha_2=track).alpha_3
-            args = {'map': f'0:m:language:{langcode}?'}
+            args = {'map': f'0:a:language:{langcode}?'}
         else:
             args = {}
 
         try:
             info = ffmpeg.probe(path, show_chapters=None)
         except ffmpeg.Error as e:
-            raise Exception(e.stderr.decode('utf8'))
+            raise Exception(e.stderr.decode('utf8')) from e
 
         ftitle = info.get('format', {}).get('tags', {}).get('title', path.name)
         fduration = info['duration'] if 'duration' in info else info['format']['duration'] if 'duration' in info['format'] else None

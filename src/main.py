@@ -331,6 +331,7 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
         return
     if len(audio) != len(text):
         print("len(audio) != len(text), input needs to be in order for alass alignment")
+        return
 
     model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', onnx=True) # onnx is much faster
     (get_speech_timestamps, _, _, *_) = utils
