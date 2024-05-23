@@ -29,10 +29,22 @@ class Txt:
                 for i, v in enumerate(self.path.read_text().split('\n'))
                 if (o := v.strip())]
 
+def sexagesimal(secs, use_comma=False):
+    mm, ss = divmod(secs, 60)
+    hh, mm = divmod(mm, 60)
+    r = f'{hh:0>2.0f}:{mm:0>2.0f}:{ss:0>6.3f}'
+    if use_comma:
+        r = r.replace('.', ',')
+    return r
+
 @dataclass(eq=True, frozen=True)
 class SubLine(TextParagraph):
     start: float
     end: float
+    def __repr__(self):
+        return f"SubLine(text='{self.content}', start={sexagesimal(self.start)}, end={sexagesimal(self.end)})"
+    def vtt(self, use_comma=False):
+        return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.text}"
 
 def parse_timing(timing):
     start, end = timing.replace(',', '.').split("-->")

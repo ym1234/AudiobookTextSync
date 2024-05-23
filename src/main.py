@@ -128,6 +128,7 @@ class Cache:
             del i['no_speech_prob']
 
         p.write_bytes(repr(content).encode('utf-8'))
+        p.flush()
         return content
 
 def match_start(audio, text, prepend, append, nopend):
@@ -344,12 +345,33 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
             segments = [Segment(text='h', start=s['start'], end=s['end']) for s in v]
             with tempfile.NamedTemporaryFile(mode="w", suffix='.srt') as f:
                 write_srt(segments, f)
+                f.flush()
                 cmd = [alass_path, *['-'+h for h in alass_args], f.name, str(t.path), str(output_dir / (a.path.stem + ''.join(t.path.suffixes)))]
                 tqdm.write(' '.join(cmd))
                 try:
                     subprocess.run(cmd)
                 except subprocess.CalledProcessError as e:
                     raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
+
+def alass_ref(alass_path, alass_args, audio, segments, offset):
+    model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', onnx=True) # onnx is much faster
+    (get_speech_timestamps, _, _, *_) = utils
+
+    v = get_speech_timestamps(audio, model, sampling_rate=16000, return_seconds=True)
+    vad_segments = [Segment(text='h', start=s['start'], end=s['end']) for s in v]
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix='.srt', delete=False) as vad, tempfile.NamedTemporaryFile(mode="w", suffix='.srt', delete=False) as seg:
+        write_srt(vad_segments, vad)
+        vad.flush()
+        write_srt([Segment(text=s.text, start=s.start-offset, end=s.end-offset) for s in segments], seg)
+        seg.flush()
+        print(vad.name, seg.name)
+        cmd = [alass_path, *['-'+h for h in alass_args], vad.name, seg.name, seg.name]
+        try:
+            subprocess.run(cmd)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
+        return [Segment(text=s.content, start=s.start+offset, end=s.end+offset) for s in SubFile(Path(seg.name)).text()]
 
 def main():
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
@@ -367,6 +389,7 @@ def main():
     parser.add_argument("--alass-path", default='alass', help="path to alass")
     parser.add_argument("--alass-args", default=['O0'], nargs="+", help="additional arguments to alass (pass without the dash, eg: O1)")
     parser.add_argument("--alass-sort", default=True, help="Sort the files (natural sort) before grouping", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--alass-refine", default=False, help="Refine the resulting subs with alass", action=argparse.BooleanOptionalAction)
 
     parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
     parser.add_argument("--overwrite", default=False,  help="Overwrite any destination files", action=argparse.BooleanOptionalAction)
@@ -399,7 +422,7 @@ def main():
 
     parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
     parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
-    parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
+    parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20─", help="TODO")
 
     parser.add_argument("--word_timestamps", default=False, help="(experimental) extract word-level timestamps and refine the results based on them", action=argparse.BooleanOptionalAction)
     parser.add_argument("--highlight_words", default=False, help="(requires --word_timestamps True) underline each word as it is spoken in srt and vtt", action=argparse.BooleanOptionalAction)
@@ -422,6 +445,7 @@ def main():
     if args.pop('alass'):
         alass(output_dir, alass_path, alass_args, alass_sort, args)
         return
+    alass_refine = args.pop('alass_refine')
 
     model, device = args.pop("model"), args.pop('device')
     if device == 'cuda' and not torch.cuda.is_available():
@@ -543,8 +567,11 @@ def main():
                 ach = [(transcribed_audio[ai].chapters[aj], audio[ai].chapters[aj].duration) for aj in ajs]
                 tch = [text[chi].chapters[chj] for chj in chjs]
                 if tch:
-                    segments.extend(do_batch(ach, tch, prepend, append, nopend, offset))
-
+                    new_segments = do_batch(ach, tch, prepend, append, nopend, offset)
+                    if alass_refine:
+                        ac = np.concatenate([audio[ai].chapters[aj].audio() for aj in ajs])
+                        new_segments = alass_ref(alass_path, alass_args, ac, new_segments, offset)
+                    segments.extend(new_segments)
                 offset += sum(a[1] for a in ach)
 
             if not segments:
