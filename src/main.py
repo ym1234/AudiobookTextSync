@@ -550,7 +550,7 @@ def main():
             if not segments:
                 continue
 
-            with out.open("w") as o:
+            with out.open("w", encoding='utf8') as o:
                 if output_format == 'srt':
                     write_srt(segments, o)
                 elif output_format == 'vtt':
