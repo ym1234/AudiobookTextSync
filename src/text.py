@@ -46,11 +46,8 @@ class SubLine(TextParagraph):
     def vtt(self, use_comma=False):
         return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.text}"
 
-def parse_timing(timing):
-    start, end = timing.replace(',', '.').split("-->")
-    conv = lambda f: sum([float(n) * (60**i) for i, n in enumerate(f.split(':')[::-1])])
-    return conv(start), conv(end)
-
+def _conv(f): return sum([float(n) * (60**i) for i, n in enumerate(f.split(':')[::-1])])
+def parse_timing(timing): return [_conv(i) for i in timing.replace(',', '.').split("-->")]
 def parse_srt_style(content, content_start, timing_idx):
     ps = []
     for i, n in enumerate(content.split('\n\n')[content_start:]):
