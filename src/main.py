@@ -16,7 +16,7 @@ def is_notebook() -> bool:
         elif shell == 'TerminalInteractiveShell':
             return False  # Terminal running IPython
         else:
-            return True  # Other type (?)
+            return True   # Other type (?)
     except NameError:
         return False      # Probably standard Python interpreter
 
