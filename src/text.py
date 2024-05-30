@@ -172,7 +172,7 @@ class TextFile:
         elif ext in TEXT_EXTENSIONS:
             raise NotImplementedError(f"filetype {ext} not implemented yet")
         else:
-            raise NotImplementedError(f"filetype {ext} not implemented")
+            raise NotImplementedError(f"filetype {ext} not supported")
 
     @classmethod
     def from_dir(cls, path):

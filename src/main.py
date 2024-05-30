@@ -8,6 +8,12 @@ from types import MethodType
 from lang import get_lang
 from wcwidth import wcswidth
 
+# Has some edge cases, for example: https://github.com/jquast/wcwidth/commit/8ed7f2c880508a44e4114ea6ac07e8a6b6c76f7f
+# from unicodedata import east_asian_width as ewidth
+# def wcswidth(s):
+#     ww = {'Na': 1, 'W': 2, 'F': 2, 'H': 1, 'A': 2, 'N': 1}
+#     return sum(ww[ewidth(c)] for c in s)
+
 def is_notebook() -> bool:
     try:
         shell = get_ipython().__class__.__name__
