@@ -132,7 +132,7 @@ class Epub:
 
             content = BeautifulSoup(item.get_content(), 'html.parser')
 
-            r = content.find('body').find_all(["p", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"])
+            r = content.find('body').find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"])
             # Most of the time chapter names are on images
             idx = 0
             while idx < len(r) and not r[idx].get_text().strip():
