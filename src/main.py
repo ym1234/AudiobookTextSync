@@ -2,6 +2,7 @@ import os
 import argparse
 import subprocess
 import tempfile
+import pycountry
 from natsort import natsorted
 from pprint import pprint
 from types import MethodType
@@ -56,7 +57,7 @@ from bs4 import BeautifulSoup
 from os.path import basename, splitext
 import time
 
-from audio import AudioFile, TranscribedAudioStream, TranscribedAudioFile
+from audio import AudioStream, TranscribedAudioChapter, TranscribedAudioStream
 from text import TextFile, SubFile
 
 
@@ -328,7 +329,7 @@ def parse_indices(s, l):
 
 
 def alass(output_dir, alass_path, alass_args, alass_sort, args):
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in args.pop('audio')))
+    audio = list(chain.from_iterable(AudioFile.from_dir(f, whole=True) for f in args.pop('audio')))
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
     audio = natsorted(audio, lambda x: x.path.name) if alass_sort else audio
     text = natsorted(text, lambda x: x.path.name) if alass_sort else text
@@ -340,7 +341,7 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
         return
 
     model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', onnx=True) # onnx is much faster
-    (get_speech_timestamps, _, _, *_) = utils
+    (get_speech_timestamps, *_) = utils
 
     with tqdm(zip(audio, text), total=len(audio)) as bar:
         for a, t in bar:
@@ -486,8 +487,9 @@ def main():
     whole = args.pop('whole')
 
     print("Loading...")
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=whole) for f in args.pop('audio')))
+    audio = list(chain.from_iterable(AudioStream.from_dir(f, whole=whole) for f in args.pop('audio')))
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+    audio = [(a[0] if len(a) == 1 else a[choose(a, i, args['language'])]) for i, a in enumerate(audio)]
 
     print('Transcribing...')
     s = time.monotonic()
@@ -521,13 +523,13 @@ def main():
             cf = []
             for j, c in enumerate(a.chapters):
                 if (i, j) not in overwrite and (t := cache.get(a.path.name, c.id)):
-                    l = lambda c=c, t=t: TranscribedAudioStream.from_map(c, t)
+                    l = lambda c=c, t=t: TranscribedAudioChapter.from_map(c, t)
                 else:
-                    l = lambda c=c: TranscribedAudioStream.from_map(c, cache.put(a.path.name, c.id, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args)))
+                    l = lambda c=c: TranscribedAudioChapter.from_map(c, cache.put(a.path.name, c.id, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args)))
                 cf.append(p.submit(l))
             fs.append(cf)
 
-        transcribed_audio =  [TranscribedAudioFile(file=audio[i], chapters=[r.result() for r in f]) for i, f in enumerate(fs)]
+        transcribed_audio =  [TranscribedAudioStream(file=audio[i], chapters=[r.result() for r in f]) for i, f in enumerate(fs)]
     print(f"Transcribing took: {time.monotonic()-s:.2f}s")
 
     print('Fuzzy matching chapters...')
