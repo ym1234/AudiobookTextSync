@@ -44,10 +44,9 @@ class AudioStream:
             raise Exception(e.stderr.decode('utf8')) from e
 
         ftitle = info.get('format', {}).get('tags', {}).get('title', path.name)
-        fduration = info.get('duration', info['format'].get('duration', None))
-        if fduration is None:
+        fduration = float(info.get('duration', info['format'].get('duration', 0)))
+        if fduration == 0:
             print(f"WARNING: Couldn't determine container duration {path.name}")
-        fduration = float(fduration)
 
         # This is kind of ugly
         streams = []
@@ -57,7 +56,7 @@ class AudioStream:
             language = astream.get('tags', {}).get('language', 'und').split('-', 1)[0]
             duration = float(astream.get('duration', fduration))
             if 'duration' not in astream:
-                print(f"WARNING: Couldn't determine the duration of {astream['index']}, this is normal for MKV and WEBM files")
+                print(f"WARNING: Couldn't determine duration of {astream['index']}, this is normal for MKV and WEBM files")
 
             output_args = {'format': 's16le', 'acodec': 'pcm_s16le', 'ac': 1, 'ar': '16k', 'map': f'0:{astream[index]}'}
             if whole or len(info['chapters']) < 1:
@@ -73,18 +72,20 @@ class AudioStream:
         return streams
 
     @classmethod
-    def from_dir(cls, path, whole=False):
+    def scandir(cls, path):
         if not path.exists(): raise FileNotFoundError(f"file {str(path)} does not exist")
-        if path.is_file():
-            yield cls.from_file(path, track, whole)
-            return
+        if path.is_file(): return path
+
         mt = {'video', 'audio'}
-        for root, _, files in os.walk(str(path)): # TODO path.walk is python3.12
-            for f in files:
-                p = Path(root) / f
-                t, enc = mimetypes.guess_type(p)
-                if p.suffix != ".ass" and t is not None and t.split('/', 1)[0] in mt:
-                    yield cls.from_file(p, track, whole)
+        files = []
+        for root, _, files in os.walk(str(path)):
+            root = Path(root)
+            for f in file:
+                p = root/f
+                t, _ = mimetypes.guess_type(p)
+                if p.suffix != '.ass' and t is not None and t.split('/', 1)[0] in mt:
+                    files.append(p)
+        return files
 
 @dataclass(eq=True, frozen=True)
 class TranscribedAudioChapter:

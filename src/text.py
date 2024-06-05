@@ -59,7 +59,7 @@ def parse_srt_style(content, content_start, timing_idx):
     return ps
 
 @dataclass(eq=True, frozen=True)
-class SubFile(Txt):
+class Sub(Txt):
     def text(self):
         ext = self.path.suffix[1:]
         content = self.path.read_text()
@@ -80,7 +80,8 @@ class EpubParagraph:
     references: list
 
     def text(self):
-        return ''.join(self.element.stripped_strings)
+        return self.element.get_text()
+        # return ''.join(self.element.stripped_strings)
 
 TEXT_TAGS = ["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]
 @dataclass(eq=True, frozen=True)
@@ -119,7 +120,7 @@ class Epub:
         flat_toc = flatten(file.toc)
         m = {it.id: i for i, e in enumerate(flat_toc) if (it := file.get_item_with_href(urllib.parse.unquote(e.href.split("#")[0])))}
         if len(m) != len(flat_toc):
-            print("WARNING: Couldn't fully map toc to chapters, contact the dev, preferably with the epub")
+            print(f"WARNING: Couldn't fully map toc to chapters, contact the dev, preferably with the epub: {path.name}")
 
         chapters = []
         prev_title = ''
@@ -131,7 +132,7 @@ class Epub:
                 if title: prev_title = title
                 continue
 
-            content = BeautifulSoup(item.get_content(), 'html.parser')
+            content = BeautifulSoup(item.get_content(), 'lxml-html')
 
             r = content.find('body').find_all(TEXT_TAGS)
             # Most of the time chapter names are on images
@@ -164,7 +165,7 @@ class TextFile:
         if 'txt' == ext:
             return Txt(path)
         elif 'srt' == ext or 'vtt' == ext:
-            return SubFile(path)
+            return Sub(path)
         elif 'epub' == ext:
             return Epub.from_file(path)
         elif ext in TEXT_EXTENSIONS:
@@ -173,13 +174,15 @@ class TextFile:
             raise NotImplementedError(f"filetype {ext} not supported")
 
     @classmethod
-    def from_dir(cls, path):
+    def scandir(cls, path):
         if path.is_file():
-            yield cls.from_file(path)
-            return
+            return path
 
+        files = []
         for root, _, files in os.walk(str(path)): # TODO path.walk is python3.12
+            root = Path(root)
             for f in files:
-                p = Path(root)/f
+                p = root/f
                 if p.suffix[1:] in TEXT_EXTENSIONS:
-                    yield cls.from_file(p)
+                    files.append(p)
+        return files

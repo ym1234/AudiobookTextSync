@@ -22,8 +22,7 @@ def is_notebook() -> bool:
             return True   # Jupyter notebook or qtconsole
         elif shell == 'TerminalInteractiveShell':
             return False  # Terminal running IPython
-        else:
-            return True   # Other type (?)
+        return True   # Other type (?)
     except NameError:
         return False      # Probably standard Python interpreter
 
@@ -58,7 +57,7 @@ from os.path import basename, splitext
 import time
 
 from audio import AudioStream, TranscribedAudioChapter, TranscribedAudioStream
-from text import TextFile, SubFile
+from text import TextFile, Sub
 
 
 def sexagesimal(secs, use_comma=False):
@@ -224,7 +223,7 @@ def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-'):
             for i in range(max(len(a), len(t))):
                 row = ['', '' if t else '?', '']
                 if i < len(a):
-                    row[0] = (audio[ai].title + "::" if not use_audio_header else '') + a[i].title
+                    row[0] = (audio[ai].title + "::" if not use_audio_header else '') + a[i].title.strip()
                     width[0] = max(width[0], wcswidth(row[0]))
                 if i < len(t):
                     row[1] = (text[chi].title + "::" if not use_text_header else '') + t[i].title.strip()
@@ -333,7 +332,7 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
     audio = natsorted(audio, lambda x: x.path.name) if alass_sort else audio
     text = natsorted(text, lambda x: x.path.name) if alass_sort else text
-    if not all(isinstance(t, SubFile) for t in text):
+    if not all(isinstance(t, Sub) for t in text):
         print('--alass inputs should be subtitle files')
         return
     if len(audio) != len(text):
@@ -487,8 +486,13 @@ def main():
     whole = args.pop('whole')
 
     print("Loading...")
-    audio = list(chain.from_iterable(AudioStream.from_dir(f, whole=whole) for f in args.pop('audio')))
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+    for i, k in enumerate(text[0].text()):
+        if k.text().strip():
+            print(i, k.text().strip())
+    # print([k.text() for k in text[0].text()])
+    exit(0)
+    audio = list(chain.from_iterable(AudioStream.from_dir(f, whole=whole) for f in args.pop('audio')))
     audio = [(a[0] if len(a) == 1 else a[choose(a, i, args['language'])]) for i, a in enumerate(audio)]
 
     print('Transcribing...')
