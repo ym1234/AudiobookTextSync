@@ -3,6 +3,7 @@ import argparse
 import subprocess
 import tempfile
 import pycountry
+from math import log10
 from natsort import natsorted
 from pprint import pprint
 from types import MethodType
@@ -357,6 +358,23 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
                 except subprocess.CalledProcessError as e:
                     raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
 
+def choose(streams, idx, language):
+    pass
+
+ # Taken from yay
+def prompt(msg, arr, single=False):
+    fstr = '{0: >'  + str(int(log10(len(arr))) + 1) +  '} {1}'
+    for i, v in enumerate(arr):
+        print(fstr.format(i, v))
+    while True:
+        inp = input(msg + '(eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ')
+        if (indices := parse_indices(inp, len(arr))) is not None:
+            if single and len(indices) > 1:
+                print("Choose only one")
+                continue
+            return indices
+        print("Parsing failed")
+
 def main():
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     parser.add_argument("--audio", nargs="+", type=Path, required=True, help="list of audio files to process (in the correct order)")
@@ -486,14 +504,49 @@ def main():
     whole = args.pop('whole')
 
     print("Loading...")
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
-    for i, k in enumerate(text[0].text()):
-        if k.text().strip():
-            print(i, k.text().strip())
-    # print([k.text() for k in text[0].text()])
-    exit(0)
-    audio = list(chain.from_iterable(AudioStream.from_dir(f, whole=whole) for f in args.pop('audio')))
-    audio = [(a[0] if len(a) == 1 else a[choose(a, i, args['language'])]) for i, a in enumerate(audio)]
+    text_cand = args.pop('text')
+    text_files = [TextFile.scandir(f) for f in text_cand]
+    text = []
+    for i, t in enumerate(text_files):
+        if type(t) is list:
+            j = []
+            for tt in t:
+                try:
+                    j.append(TextFlie.from_file(tt))
+                except Exception as e:
+                    print(e)
+            print(f"Picked up the following from directory: {text_cand[i]}")
+            indices = prompt('Choose text files to exclude: ', [v.path.name for v in j])
+            for k in indices: j.pop(k)
+            text.extend(j)
+        else:
+            text.append(TextFile.from_file(t)) # Exceptions here are unhandled and buble to the user
+
+    audio_cand = args.pop('audio')
+    audio_files = [AudioStream.scandir(f) for f in audio_cand]
+    audio_streams = []
+    for i, a in enumerate(text_files):
+        if type(a) is list:
+            j = []
+            for aa in a:
+                try:
+                    j.append(AudioStream.from_file(tt))
+                except Exception as e:
+                    print(e)
+            print(f"Picked up the following from directory: {audio_cand[i]}")
+            indices = prompt('Choose text files to exclude: ', [v.path.name for v in j])
+            for k in indices: j.pop(k)
+            audio_streams.extend(j)
+        else:
+            audio_streams.append(AudioStream.from_file(a)) # Exceptions here are unhandled and buble to the user
+
+    audio = []
+    for i, a_s in enumerate(audio_streams):
+        if len(a_s) == 1:
+            audio.append(a_s[0])
+            continue
+        indices = prompt(f"Choose audio track for file {a_s.path.name} ", [a.chapters[0].language for a in a_s])
+        audio.append(a_s[indices[0]])
 
     print('Transcribing...')
     s = time.monotonic()
@@ -503,33 +556,25 @@ def main():
     # TODO: This really doesn't have much of a perf improvement
     # Get rid of it and update faster-whisper to support batching
     with futures.ThreadPoolExecutor(max_workers=threads) as p:
-        in_cache = []
+        in_cache = {}
         for i, a in enumerate(audio):
             for j, c in enumerate(a.chapters):
-                if cache.get(a.path.name, c.id): # Cache the result here and not in the class?
-                    in_cache.append((i, j))
+                if t := cache.get(a.path.name, c.id): # Cache the result here and not in the class?
+                    in_cache[i, j] = t
 
+        overwrite = set(in_cache) if overwrite_cache else set()
         if cache.ask and len(in_cache):
-            for i, v in enumerate(in_cache):
-                name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
-                print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
-            indices = None
-            while indices is None:
-                inp = input('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ') # Taken from yay
-                if (indices := parse_indices(inp, len(in_cache))) is None:
-                    print("Parsing failed")
+            names = [audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title for i, v in enumerate(in_cache)]
+            indices = prompt('Choose cache files to overwrite: ', names)
             overwrite = {in_cache[i] for i in indices}
-        else:
-            overwrite = set(in_cache) if overwrite_cache else set()
 
         fs = []
         for i, a in enumerate(audio):
             cf = []
             for j, c in enumerate(a.chapters):
-                if (i, j) not in overwrite and (t := cache.get(a.path.name, c.id)):
+                l = lambda c=c: TranscribedAudioChapter.from_map(c, cache.put(a.path.name, c.id, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args)))
+                if (i, j) not in overwrite and (t := in_cache.get((i, j), None)):
                     l = lambda c=c, t=t: TranscribedAudioChapter.from_map(c, t)
-                else:
-                    l = lambda c=c: TranscribedAudioChapter.from_map(c, cache.put(a.path.name, c.id, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args)))
                 cf.append(p.submit(l))
             fs.append(cf)
 
