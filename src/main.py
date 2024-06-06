@@ -309,24 +309,6 @@ def faster_transcribe(self, audio, **args):
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
-def parse_indices(s, l):
-    ss, r = s.split(), set()
-    for a in ss:
-        try:
-            if a[0] == '^':
-                val = int(a[1:])
-                r = r.union(range(l)) - {val}
-            elif len(k := a.split('-')) > 1:
-                val1 = min(int(k[0]), l-1)
-                val2 = min(int(k[1]), l-1)
-                r = r.union(range(val1, val2+1))
-            else:
-                if (val1 := int(a)) < l:
-                    r.add(val1)
-        except ValueError:
-            return
-    return r
-
 
 def alass(output_dir, alass_path, alass_args, alass_sort, args):
     audio = list(chain.from_iterable(AudioFile.from_dir(f, whole=True) for f in args.pop('audio')))
@@ -361,6 +343,24 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
 def choose(streams, idx, language):
     pass
 
+def parse_indices(s, l):
+    ss, r = s.split(), set()
+    for a in ss:
+        try:
+            if a[0] == '^':
+                val = int(a[1:])
+                r = r.union(range(l)) - {val}
+            elif len(k := a.split('-')) > 1:
+                val1 = min(int(k[0]), l-1)
+                val2 = min(int(k[1]), l-1)
+                r = r.union(range(val1, val2+1))
+            else:
+                if (val1 := int(a)) < l:
+                    r.add(val1)
+        except ValueError:
+            return
+    return r
+
  # Taken from yay
 def prompt(msg, arr, single=False):
     fstr = '{0: >'  + str(int(log10(len(arr))) + 1) +  '} {1}'
@@ -369,8 +369,8 @@ def prompt(msg, arr, single=False):
     while True:
         inp = input(msg + '(eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ')
         if (indices := parse_indices(inp, len(arr))) is not None:
-            if single and len(indices) > 1:
-                print("Choose only one")
+            if single and len(indices) != 1:
+                print("Choose only one of the above")
                 continue
             return indices
         print("Parsing failed")
@@ -512,31 +512,31 @@ def main():
             j = []
             for tt in t:
                 try:
-                    j.append(TextFlie.from_file(tt))
+                    j.append(TextFile.from_file(tt))
                 except Exception as e:
                     print(e)
-            print(f"Picked up the following from directory: {text_cand[i]}")
-            indices = prompt('Choose text files to exclude: ', [v.path.name for v in j])
-            for k in indices: j.pop(k)
-            text.extend(j)
+            if len(j):
+                print(f"Picked up the following from directory: {text_cand[i]}")
+                indices = prompt('Choose text files to exclude: ', [v.path.name for v in j])
+                text.extend([v for i, v in enumerate(j) if i not in indices])
         else:
-            text.append(TextFile.from_file(t)) # Exceptions here are unhandled and buble to the user
+            text.append(TextFile.from_file(t)) # Exceptions here are unhandled and bubble to the user
 
     audio_cand = args.pop('audio')
     audio_files = [AudioStream.scandir(f) for f in audio_cand]
     audio_streams = []
-    for i, a in enumerate(text_files):
+    for i, a in enumerate(audio_files):
         if type(a) is list:
             j = []
             for aa in a:
                 try:
-                    j.append(AudioStream.from_file(tt))
+                    j.append(AudioStream.from_file(aa))
                 except Exception as e:
                     print(e)
-            print(f"Picked up the following from directory: {audio_cand[i]}")
-            indices = prompt('Choose text files to exclude: ', [v.path.name for v in j])
-            for k in indices: j.pop(k)
-            audio_streams.extend(j)
+            if len(j):
+                print(f"Picked up the following from directory: {audio_cand[i]}")
+                indices = prompt('Choose audio files to exclude: ', [v[0].path.name for v in j])
+                audio_streams.extend([v for i, v in enumerate(j) if i not in indices])
         else:
             audio_streams.append(AudioStream.from_file(a)) # Exceptions here are unhandled and buble to the user
 
@@ -545,7 +545,7 @@ def main():
         if len(a_s) == 1:
             audio.append(a_s[0])
             continue
-        indices = prompt(f"Choose audio track for file {a_s.path.name} ", [a.chapters[0].language for a in a_s])
+        indices = list(prompt(f"Choose audio track for file {a_s[0].path.name} ", [a.chapters[0].language for a in a_s], single=True))
         audio.append(a_s[indices[0]])
 
     print('Transcribing...')

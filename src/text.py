@@ -179,9 +179,9 @@ class TextFile:
             return path
 
         files = []
-        for root, _, files in os.walk(str(path)): # TODO path.walk is python3.12
+        for root, _, fs in os.walk(str(path)): # TODO path.walk is python3.12
             root = Path(root)
-            for f in files:
+            for f in fs:
                 p = root/f
                 if p.suffix[1:] in TEXT_EXTENSIONS:
                     files.append(p)

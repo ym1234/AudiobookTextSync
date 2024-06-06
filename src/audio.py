@@ -58,7 +58,7 @@ class AudioStream:
             if 'duration' not in astream:
                 print(f"WARNING: Couldn't determine duration of {astream['index']}, this is normal for MKV and WEBM files")
 
-            output_args = {'format': 's16le', 'acodec': 'pcm_s16le', 'ac': 1, 'ar': '16k', 'map': f'0:{astream[index]}'}
+            output_args = {'format': 's16le', 'acodec': 'pcm_s16le', 'ac': 1, 'ar': '16k', 'map': f'0:{astream["index"]}'}
             if whole or len(info['chapters']) < 1:
                 chapters = [AudioChapter(stream=ffmpeg.input(path).output('-', **output_args), duration=duration, title=ftitle, id=-1, language=language)]
             else:
@@ -78,9 +78,9 @@ class AudioStream:
 
         mt = {'video', 'audio'}
         files = []
-        for root, _, files in os.walk(str(path)):
+        for root, _, fs in os.walk(str(path)):
             root = Path(root)
-            for f in file:
+            for f in fs:
                 p = root/f
                 t, _ = mimetypes.guess_type(p)
                 if p.suffix != '.ass' and t is not None and t.split('/', 1)[0] in mt:
