@@ -309,7 +309,6 @@ def faster_transcribe(self, audio, **args):
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
-
 def alass(output_dir, alass_path, alass_args, alass_sort, args):
     audio = list(chain.from_iterable(AudioFile.from_dir(f, whole=True) for f in args.pop('audio')))
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
@@ -340,9 +339,6 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
                 except subprocess.CalledProcessError as e:
                     raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
 
-def choose(streams, idx, language):
-    pass
-
 def parse_indices(s, l):
     ss, r = s.split(), set()
     for a in ss:
@@ -361,7 +357,7 @@ def parse_indices(s, l):
             return
     return r
 
- # Taken from yay
+# Taken from yay
 def prompt(msg, arr, single=False):
     fstr = '{0: >'  + str(int(log10(len(arr))) + 1) +  '} {1}'
     for i, v in enumerate(arr):
@@ -411,9 +407,13 @@ def main():
     parser.add_argument("--patience", type=float, default=None, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
     parser.add_argument("--length_penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
+    # Need to experiment on this
     parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
-    parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
-    parser.add_argument("--condition_on_previous_text", default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop", action=argparse.BooleanOptionalAction)
+
+    # None of these are useful really
+    # What is this token? Is it useful? [50256]
+    # parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
+    # parser.add_argument("--condition_on_previous_text", default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop", action=argparse.BooleanOptionalAction)
 
     parser.add_argument("--temperature", type=float, default=0, help="temperature to use for sampling")
     parser.add_argument("--temperature_increment_on_fallback", type=float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
