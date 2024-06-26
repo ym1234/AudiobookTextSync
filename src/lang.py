@@ -43,8 +43,7 @@ class English(Language):
         self.translations = {ord(i): '.' for i in prepend}
 
 class Chinese(Language):
-    def clean(self, s):
-        return chinese_converter.to_simplified(s)
+    def translate(self, s): return chinese_converter.to_simplified(s)
 
 _languages = {
         'ja': Japanese,
