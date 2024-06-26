@@ -1,6 +1,7 @@
 import regex as re
 import unicodedata
 from functools import cache
+import chinese_converter
 
 class Language:
     def __init__(self, prepend, append, nopend): # Should each language have its own *pend defaults?
@@ -41,9 +42,14 @@ class English(Language):
     def __init__(self, prepend, append, nopend):
         self.translations = {ord(i): '.' for i in prepend}
 
+class Chinese(Langugae):
+    def clean(self, s):
+        return chinese_converter.to_simplified(s)
+
 _languages = {
         'ja': Japanese,
         'en': English,
+        'zh': Chinese,
 }
 
 @cache

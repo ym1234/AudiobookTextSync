@@ -29,9 +29,13 @@ class Txt:
                 for i, v in enumerate(self.path.read_text().split('\n'))
                 if (o := v.strip())]
 
-def sexagesimal(secs, use_comma=False):
+def hdiv(secs):
     mm, ss = divmod(secs, 60)
     hh, mm = divmod(mm, 60)
+    return hh, mm, ss
+
+def sexagesimal(secs, use_comma=False):
+    hh, mm, ss = hdiv(secs)
     r = f'{hh:0>2.0f}:{mm:0>2.0f}:{ss:0>6.3f}'
     if use_comma:
         r = r.replace('.', ',')
@@ -44,7 +48,7 @@ class SubLine(TextParagraph):
     def __repr__(self):
         return f"SubLine(text='{self.content}', start={sexagesimal(self.start)}, end={sexagesimal(self.end)})"
     def vtt(self, use_comma=False):
-        return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.text}"
+        return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.content}"
 
 def _conv(f): return sum([float(n) * (60**i) for i, n in enumerate(f.split(':')[::-1])])
 def parse_timing(timing): return [_conv(i) for i in timing.replace(',', '.').split("-->")]
