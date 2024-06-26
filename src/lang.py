@@ -42,7 +42,7 @@ class English(Language):
     def __init__(self, prepend, append, nopend):
         self.translations = {ord(i): '.' for i in prepend}
 
-class Chinese(Langugae):
+class Chinese(Language):
     def clean(self, s):
         return chinese_converter.to_simplified(s)
 
