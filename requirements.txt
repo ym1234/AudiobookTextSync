@@ -11,3 +11,4 @@ tqdm>=4.66.3
 wcwidth>=0.2.13
 onnxruntime>=1.18.0
 pycountry>=23.12.11
+chinese_converter==1.1.1
