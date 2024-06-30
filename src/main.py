@@ -223,7 +223,7 @@ def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-'):
             for i in range(max(len(a), len(t))):
                 row = ['', '' if t else '?', '']
                 if i < len(a):
-                    row[0] = (audio[ai].title + "::" if not use_audio_header else '') + a[i].title
+                    row[0] = (audio[ai].title + "::" if not use_audio_header else '') + a[i].title.strip()
                     width[0] = max(width[0], wcswidth(row[0]))
                 if i < len(t):
                     row[1] = (text[chi].title + "::" if not use_text_header else '') + t[i].title.strip()
