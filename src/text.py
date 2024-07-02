@@ -67,7 +67,6 @@ class SubFile(Txt):
     def text(self):
         ext = self.path.suffix[1:]
         content = self.path.read_text()
-        ps = []
         if ext == 'srt': # Split multiline subtitles? leave them as is?
             return parse_srt_style(content, 0, 1)
         elif ext == 'vtt':
@@ -147,7 +146,7 @@ class Epub:
                 continue
 
             if not title:
-                if (t := prev_title.strip()):
+                if t := prev_title.strip():
                     title = t
                     prev_title = ''
                 elif len(t := r[idx].get_text().strip()) < 25:
@@ -159,7 +158,7 @@ class Epub:
             chapters.append(chapter)
         return cls(epub=file, path=path, title=file.title.strip() or path.name, chapters=chapters)
 
-TEXT_EXTENSIONS: list = set(['txt', 'epub', 'srt', 'vtt'])
+TEXT_EXTENSIONS = set(['txt', 'epub', 'srt', 'vtt'])
 @dataclass(eq=True, frozen=True)
 class TextFile:
     @classmethod
