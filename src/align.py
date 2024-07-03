@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+import calign
 from Bio import Align
 from Bio.Align import substitution_matrices
 from pprint import pprint

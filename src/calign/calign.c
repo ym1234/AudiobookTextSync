@@ -1,13 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
-#include <sys/mman.h>
-// #include <immintrin.h>
-#include <errno.h>
-#include <stdbool.h>
-#include <x86intrin.h>
-
 /* void queue_get(queue q, void **val_r) { */
 /*     pthread_mutex_lock(&q->mtx); */
 
@@ -31,6 +21,15 @@
 /*     pthread_cond_signal(&q->cond); */
 /* } */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <x86intrin.h>
+// #include <immintrin.h>
 
 // Parasail
 // 3 or 2 doesn't really matter
@@ -38,68 +37,44 @@
 // _MM_SHUFFLE = x << 6 | y << 4 | z << 2 | f
 #define _mm256_slli_si256_rpl(a,imm)  _mm256_alignr_epi8(a, _mm256_permute2x128_si256(a, a, _MM_SHUFFLE(0,0,2,0)), 16-imm)
 
-#define MATCH 1
-#define MISMATCH  -1
-#define GAP_OPEN  -1
-#define GAP_EXTEND -1
-
 #define SIMD_WIDTH ((int) 256)
 #define SIMD_WIDTH_BYTES (SIMD_WIDTH/8)
 #define ELEM_WIDTH ((int) 16)
 #define ELEM_WIDTH_BYTES (ELEM_WIDTH / 8)
 #define SIMD_ELEM (SIMD_WIDTH/ELEM_WIDTH)
 
-static inline int32_t max(int32_t a, int32_t b) {
-  return (a > b ? a : b);
-}
 
-static inline int32_t min(int32_t a, int32_t b) {
-  return (a < b ? a : b);
-}
-
-static inline size_t align(size_t n, size_t alignment) {
-  size_t a = alignment - 1;
-  return (n+a) & ~a;
-}
-
-void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t len, size_t lanes) {
-  size_t stride = len / lanes;
-  for (int i = 0; i < len; i++) {
-    int vi = i/lanes, vj = i%lanes;
-    ret[i] = seq[vj * stride + vi];
-  }
-}
-
-void unstride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t len, size_t lanes) {
-  size_t stride = len / lanes;
-  for (int i = 0; i < len; i++) {
-    int vi = i/lanes, vj = i%lanes;
-    ret[vj * stride + vi] = seq[i];
-  }
-}
+// All the restricts because I don't understand how this shit works wtf
+// https://www.dii.uchile.cl/~daespino/files/Iso_C_1999_definition.pdf 6.7.3.1
+// https://davmac.wordpress.com/2013/08/07/what-restrict-really-means/
+// Looking at code gen it doesn't seem to make much of a difference
 
 typedef struct AlignmentState {
   size_t alloc_size;
 
   // State
   // query_len
-  __m256i *vHMin;
+  __m256i * restrict vHMin;
 
-  __m256i *pvHLoad;
-  __m256i *pvHStore;
+  __m256i * restrict pvHLoad;
+  __m256i * restrict pvHStore;
+  __m256i * restrict pvHLoad2;
 
-  __m256i *vEMin;
-  __m256i *pvE;
+  __m256i * restrict vEMin;
+
+  __m256i * restrict pvE;
+  __m256i * restrict pvE2;
+
+  // Hirschberg state
+  uint16_t * restrict traceback; // database_len + query_len
+  size_t idx;
 
   // Input
   uint16_t * restrict query;
   size_t query_len;
   uint16_t * restrict database;
+  uint16_t * restrict reverse_database;
   size_t database_len;
-
-  // Hirschberg state
-  uint16_t *traceback; // database_len + query_len
-  size_t idx;
 
   // Scores
   __m256i vMatch;
@@ -107,6 +82,35 @@ typedef struct AlignmentState {
   __m256i vGapOpen;
   __m256i vGapExtend;
 } AlignmentState;
+
+static inline int32_t max(int32_t a, int32_t b) {
+  return a > b ? a : b;
+}
+
+static inline int32_t min(int32_t a, int32_t b) {
+  return a < b ? a : b;
+}
+
+static inline size_t align(size_t n, size_t alignment) {
+  size_t a = alignment - 1;
+  return (n+a) & ~a;
+}
+
+static inline void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t len, size_t lanes) {
+  size_t stride = len / lanes;
+  for (int i = 0; i < len; i++) {
+    int vi = i/lanes, vj = i%lanes;
+    ret[i] = seq[vj * stride + vi];
+  }
+}
+
+static inline void unstride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t len, size_t lanes) {
+  size_t stride = len / lanes;
+  for (int i = 0; i < len; i++) {
+    int vi = i/lanes, vj = i%lanes;
+    ret[vj * stride + vi] = seq[i];
+  }
+}
 
 /* // TODO: https://arxiv.org/pdf/1909.00899 */
 /* int semiglobal_scan(uint16_t * restrict x, size_t lx, uint16_t * restrict y, size_t ly) { */
@@ -116,18 +120,18 @@ typedef struct AlignmentState {
 // TODO change h and e sizes depending on lx and ly
 // lx and ly are assumed to be aligned
 /* int semiglobal(uint16_t * restrict x, size_t lx, uint16_t * restrict y, size_t ly) { */
-static int semiglobal(AlignmentState *state) {
+int semiglobal(uint16_t *database, size_t database_len, AlignmentState *state) {
   size_t stride = (state->query_len + SIMD_ELEM - 1) / SIMD_ELEM;
   __m256i *vQuery = (__m256i *) state->query;
 
-  __m256i *pvELoad = state->vEMin;
-  __m256i *pvEStore = state->pvE;
+  __m256i * restrict pvELoad = state->vEMin;
+  __m256i * restrict pvEStore = state->pvE;
 
-  __m256i *pvHLoad = state->vHMin;
-  __m256i *pvHStore = state->pvHStore;
+  __m256i * restrict pvHLoad = state->vHMin;
+  __m256i * restrict pvHStore = state->pvHStore;
 
-  for (int i = 0; i < state->database_len; i++) {
-    __m256i vY = _mm256_set1_epi16(state->database[i]);
+  for (int i = 0; i < database_len; i++) {
+    __m256i vY = _mm256_set1_epi16(database[i]);
     __m256i vF = _mm256_set1_epi16(INT16_MIN);
 
     __m256i vH = _mm256_loadu_si256(state->pvHLoad + stride - 1);
@@ -181,23 +185,30 @@ end:
     __m256i *vp = state->pvHLoad;
     pvHLoad = state->pvHStore;
     pvHStore = vp;
+
+    state->pvHLoad = pvHLoad;
+    state->pvHStore = pvHStore;
   }
+
+  return 0;
 }
 
 
-static int hirschberg(
+// X and Y are both aligned
+int hirschberg(
     uint16_t * restrict x, uint16_t * restrict y,
     size_t lx, size_t ly,
     int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend,
     AlignmentState *state
 ) {
-  printf("Hello world\n");
+
+
   size_t squery = align(lx, SIMD_ELEM);
   size_t sdatabase = align(ly, SIMD_ELEM);
   size_t stride = squery / SIMD_ELEM;
-  /* printf("%d\n", stride); */
+  bool root = state == NULL;
 
-  if (state == NULL) {
+  if (root) {
     size_t sstruct = align(sizeof(AlignmentState), SIMD_WIDTH_BYTES);
     size_t buffer = stride * sizeof(__m256i);
     size_t sbuffers = 5 * buffer;
@@ -212,19 +223,24 @@ static int hirschberg(
     state->pvHLoad = state->vHMin + stride;
     /* printf("%u, %u\n", buffer, ((void *) state->pvHLoad) - ((void *) state->vHMin)); */
     state->pvHStore = state->pvHLoad + stride;
+    state->pvHLoad2 = state->pvHStore + stride;
 
-    state->vEMin = state->pvHStore + stride;
+    state->vEMin = state->pvHLoad2 + stride;
     state->pvE = state->vEMin + stride;
+    state->pvE2 = state->pvE + stride;
 
-    state->traceback = (uint16_t *) (state->pvE + stride);
+    state->traceback = (uint16_t *) (state->pvE2 + stride);
     state->idx = 0;
 
     state->query = state->traceback + straceback;
     state->database = state->query + squery;
+    state->database = state->database + ly;
+    memcpy(state->database, y, ly * sizeof(*y));
     // How should this be specified?
     state->query_len = squery;
     state->database_len = ly; // sdatabase;
 
+    // Idk if this shit is needed, just do itin the function?
     state->vMatch = _mm256_set1_epi16(match);
     state->vMisMatch = _mm256_set1_epi16(mismatch);
     state->vGapOpen = _mm256_set1_epi16(gapopen);
@@ -235,4 +251,26 @@ static int hirschberg(
       _mm256_storeu_si256(state->vEMin+i, Min);
     }
   }
+
+  /* for (int i = 0; i < lx; i++) { */
+  /*   printf("%d, ", x[i]); */
+  /* } */
+  /* printf("\n"); */
+  stride_seq(x, state->query, squery, SIMD_ELEM);
+  semiglobal(state->database, state->databasestate);
+
+  /* for (int i = 0; i < lx; i++) { */
+  /*   printf("%d, ", state->query[i]); */
+  /* } */
+  /* printf("\n"); */
+
+  if (root) {
+    munmap(state, state->alloc_size);
+  }
+  return 0;
+}
+
+int main() {
+  (void) hirschberg;
+  (void) semiglobal;
 }
