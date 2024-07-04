@@ -41,8 +41,8 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
     if len(alphabet) > 2**16:
         raise Exception("Doesn't support alphabet sizes more than 2**16")
 
-    cdef cnp.ndarray[cnp.uint16_t] q = array_align(np.searchsorted(alphabet, query_np).astype(np.uint16), SIMD_ELEM)
-    cdef cnp.ndarray[cnp.uint16_t] d = array_align(np.searchsorted(alphabet, database_np).astype(np.uint16), SIMD_ELEM)
+    cdef cnp.ndarray[cnp.uint16_t] q = array_align(np.searchsorted(alphabet, query_np).astype(np.uint16), SIMD_ELEM*2)
+    cdef cnp.ndarray[cnp.uint16_t] d = array_align(np.searchsorted(alphabet, database_np).astype(np.uint16), SIMD_ELEM*2)
 
 
     requirements = ['A', 'C', 'W', 'O', 'E']
@@ -51,6 +51,8 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
 
     cdef cnp.ndarray[cnp.uintp_t] traceback = np.zeros(len(q16) + len(d16), dtype=np.uintp)
 
+    print(len(q16))
+    print(len(d16))
     hirschberg(<cnp.uint16_t *> q16.data, <cnp.uint16_t *> d16.data,
                len(query), len(database), len(q16), len(d16),
                match, mismatch, gap_open, gap_extend,

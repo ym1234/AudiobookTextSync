@@ -21,6 +21,9 @@
 /*     pthread_cond_signal(&q->cond); */
 /* } */
 
+// Casting is for utility functions is really annoying, switch to cpp or something?
+// lik ethe underyilng code doesn't really change for most utility functions (ex reverse16)
+// are cpp compilers smart enough to realize that?
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -76,7 +79,7 @@ static void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t 
     __m256i S = _mm256_and_si256(Second, Mask);
 
     __m256i packed = _mm256_packus_epi32(F, S);
-    __m256i corrected = _mm256_permute4x64_epi64(packed, _MM_SHUFFLE(2, 0, 3, 1));
+    __m256i corrected = _mm256_permute4x64_epi64(packed, _MM_SHUFFLE(3, 1, 2, 0));
     _mm256_store_si256((__m256i *) (ret + i * SIMD_ELEM), corrected);
   }
 }
@@ -254,6 +257,44 @@ void semiglobal(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t
   }
 }
 
+size_t add_max(__m256i *n1, __m256i *n2, size_t len) {
+  __m256i Max = n1[0];
+  size_t max_idx = 0;
+  for (int i = 1; i < len; i++) {
+    __m256i r = _mm256_adds_epi16(n1[i], n2[i]);
+
+    printf("%x\n",_mm256_movemask_epi8(_mm256_cmpgt_epi16(r, Max)));
+    if (_mm256_movemask_epi8(_mm256_cmpgt_epi16(r, Max)) == 0x0000ffff) {
+      printf("HERE\n");
+      Max = _mm256_max_epi16(Max, r);
+      max_idx = i;
+    }
+  }
+  return max_idx;
+}
+
+// https://stackoverflow.com/questions/23590610/find-index-of-maximum-element-in-x86-simd-vector
+uint32_t hmax_index(const __m256i v)
+{
+    __m256i vmax = v;
+
+    vmax = _mm256_max_epi16(vmax, _mm256_alignr_epi8(vmax, vmax, 2));
+    vmax = _mm256_max_epi16(vmax, _mm256_alignr_epi8(vmax, vmax, 4));
+    vmax = _mm256_max_epi16(vmax, _mm256_alignr_epi8(vmax, vmax, 8));
+    vmax = _mm256_max_epi16(vmax, _mm256_permute2x128_si256(vmax, vmax, 0x01));
+
+    __m256i vcmp = _mm256_cmpeq_epi16(v, vmax);
+    int16_t *l = (int16_t *) &vmax;
+    printf("MAX %d\n", l[0]);
+    /* for (int i 0; i < 16; i++) { */
+    /* } */
+
+    uint32_t mask = _mm256_movemask_epi8(vcmp);
+    uint32_t idx  = __builtin_ctz(mask) >> 1;
+    printf("%x\n", mask);
+    return idx;
+}
+
 // X and Y are both aligned
 void hirschberg_internal(
     uint16_t * restrict x, uint16_t * restrict y, uint16_t * restrict ry,
@@ -262,8 +303,21 @@ void hirschberg_internal(
     AlignmentState *state, Result *result, size_t alloc_size
 ) {
 
+  printf("QOriginal: ");
+  for (int i = 0; i < alx; i++) {
+    printf("%d, ", ((int16_t *) x)[i]);
+  }
+  printf("\nQStrided: ");
   stride_seq(x, (uint16_t *) state->query, alx);
-  reverse16((uint16_t *) state->query, (uint16_t *) state->query_reversed, lx, alx);
+  for (int i = 0; i < alx; i++) {
+    printf("%d, ", ((int16_t *) state->query)[i]);
+  }
+  printf("\nQReversed: ");
+  reverse16((uint16_t *) state->query, (uint16_t *) state->query_reversed, alx, alx);
+  for (int i = 0; i < alx; i++) {
+    printf("%d, ", ((int16_t *) state->query_reversed)[i]);
+  }
+  printf("\n");
 
   AlignmentParams params = {
     .vHMin = state->vHMin,
@@ -277,10 +331,16 @@ void hirschberg_internal(
     .query_len = alx,
     .database_len = ly/2,
   };
+  printf("len db %d\n", params.database_len);
   semiglobal(&params, match, mismatch, gapopen, gapextend);
+  __m256i *n1 = params.pvHLoad;
 
-  for (int i = 0; i < lx; i++) {
-    printf("%d, ", ((int16_t *) params.pvHLoad)[i]);
+  printf("First Split: ");
+  for (int i = 0; i < SIMD_ELEM; i++) {
+    for (int j = 0; j < alx/SIMD_ELEM; j += 1) {
+      int idx = i + j*SIMD_ELEM;
+      printf("%d, ", ((int16_t *) n1)[idx]);
+    }
   }
   printf("\n");
 
@@ -289,13 +349,35 @@ void hirschberg_internal(
 
   params.query = state->query_reversed;
   params.database = ry;
-  params.database_len = ly - ly/2;
+  params.database_len = ly - ly/2 - 1;
+  printf("reverse db len %d\n", params.database_len);
   semiglobal(&params, match, mismatch, gapopen, gapextend);
 
-  for (int i = 0; i < lx; i++) {
-    printf("%d, ", ((int16_t *) params.pvHLoad2)[i]);
+  /* printf("Reverse Split"); */
+  reverse16((uint16_t *) state->pvHLoad2, (uint16_t *) state->pvHStore, alx, alx);
+  /* for (int i = 0; i < lx; i++) { */
+  /*   printf("%d, ", ((int16_t *) state->pvHStore)[i]); */
+  /* } */
+  /* printf("\n"); */
+
+
+  printf("Second Split: ");
+  for (int i = 0; i < SIMD_ELEM; i++) {
+    for (int j = 0; j < alx/SIMD_ELEM; j += 1) {
+      /* int idx = -i + (alx/SIMD_ELEM - j - 1) * SIMD_ELEM; */
+      /* printf("j %d\n", j); */
+      /* int idx = i + j*SIMD_ELEM; */
+      int idx = i + j*SIMD_ELEM;
+      printf("%d, ", ((int16_t *) state->pvHStore)[idx]);
+    }
   }
   printf("\n");
+
+  /* size_t idx = add_max(n1, state->pvHLoad2, alx/SIMD_ELEM); */
+  /* printf("%d\n", idx); */
+  /* size_t tidx = hmax_index(_mm256_adds_epi16(n1[idx], state->pvHLoad2[idx])); */
+  /* printf("%d\n", tidx); */
+  /* n1[] */
 }
 
 
@@ -313,7 +395,7 @@ Result hirschberg(
 
   size_t bsize = alx * sizeof(uint32_t);
   size_t bstride = bsize/SIMD_WIDTH_BYTES;
-  printf("%lx, %lx\n", bsize, bstride);
+  printf("Size %lx, stride %lx\n", bsize, bstride);
 
   size_t constants_size = align(2*bsize + aly * sizeof(uint16_t), 4096);
   void *constants = mmap(0, constants_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -340,11 +422,16 @@ Result hirschberg(
     _mm256_store_si256(state.vEMin+i, Min);
   }
 
-  for (int i = 0; i < ly; i++) {
+  printf("DBOriginal: ");
+  for (int i = 0; i < aly; i++) {
     printf("%d, ", y[i]);
   }
-  printf("\n");
   reverse16(y, state.database_reversed, ly, aly);
+  printf("\nDBReversed: ");
+  for (int i = 0; i < aly; i++) {
+    printf("%d, ", state.database_reversed[i]);
+  }
+  printf("\n");
 
   hirschberg_internal(x, y, state.database_reversed,
       lx, ly, alx, aly,
