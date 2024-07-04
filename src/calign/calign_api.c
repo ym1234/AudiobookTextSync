@@ -82,6 +82,9 @@ static void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t 
 }
 
 // s may be not aligned, r must be aligned
+// TODO https://stackoverflow.com/questions/40919766/unaligned-load-versus-unaligned-store
+// https://lwn.net/Articles/255364/
+// Although the biggest problem here is permute2x128 probably
 static void reverse16(uint16_t * restrict s,  uint16_t * restrict r, size_t len, size_t alen) {
   __m256i ShuffleMask = _mm256_set_epi8(
         1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14,
@@ -100,9 +103,8 @@ static void reverse16(uint16_t * restrict s,  uint16_t * restrict r, size_t len,
   }
 }
 
-
-
 // All the restricts because I don't understand how this shit works wtf
+// UB hellscape
 // https://www.dii.uchile.cl/~daespino/files/Iso_C_1999_definition.pdf 6.7.3.1
 // https://davmac.wordpress.com/2013/08/07/what-restrict-really-means/
 // Looking at code gen it doesn't seem to make much of a difference
@@ -143,7 +145,7 @@ typedef struct Result {
   int64_t score;
 } Result;
 
-/* // TODO: https://arxiv.org/pdf/1909.00899 */
+// TODO: https://arxiv.org/pdf/1909.00899
 /* int semiglobal_scan(uint16_t * restrict x, size_t lx, uint16_t * restrict y, size_t ly) { */
 /* } */
 
@@ -224,7 +226,10 @@ void semiglobal(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t
       cmp = _mm256_movemask_epi8(vTemp);
     }
 
-    /* //  Copied from parasail */
+    //  Copied from parasail
+    //  This seems to produce "Wrong" results in a few places, and i'm not whether that's intentional or not (or a bug?)
+    //  ie wether it doesn't affect the traceback score
+    //  It probably biases the traceback to take a certain shape (without changing the score) but i'm not sure
     /* for (int k = 0; k < SIMD_ELEM; ++k) { */
     /*     vF = _mm256_slli_si256_rpl(vF, 2); */
     /*     vF = _mm256_insert_epi16(vF, INT16_MIN, 0); */
@@ -279,16 +284,16 @@ void hirschberg_internal(
   }
   printf("\n");
 
-  /* params.pvHLoad = state->pvHLoad2; */
-  /* params.pvE = state->pvE2; */
+  params.pvHLoad = state->pvHLoad2;
+  params.pvE = state->pvE2;
 
-  /* params.query = state->query_reversed; */
-  /* params.database = ry; */
-  /* params.database_len = ly - ly/2; */
-  /* semiglobal(&params, match, mismatch, gapopen, gapextend); */
+  params.query = state->query_reversed;
+  params.database = ry;
+  params.database_len = ly - ly/2;
+  semiglobal(&params, match, mismatch, gapopen, gapextend);
 
   for (int i = 0; i < lx; i++) {
-    printf("%d, ", ((int16_t *) params.pvHLoad)[i]);
+    printf("%d, ", ((int16_t *) params.pvHLoad2)[i]);
   }
   printf("\n");
 }
