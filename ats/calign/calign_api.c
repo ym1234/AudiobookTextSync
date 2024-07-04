@@ -264,7 +264,7 @@ size_t add_max(__m256i *n1, __m256i *n2, size_t len) {
     __m256i r = _mm256_adds_epi16(n1[i], n2[i]);
 
     printf("%x\n",_mm256_movemask_epi8(_mm256_cmpgt_epi16(r, Max)));
-    if (_mm256_movemask_epi8(_mm256_cmpgt_epi16(r, Max)) == 0x0000ffff) {
+    if (_mm256_movemask_epi8(_mm256_cmpgt_epi16(r, Max)) == 0xffffffff) {
       printf("HERE\n");
       Max = _mm256_max_epi16(Max, r);
       max_idx = i;

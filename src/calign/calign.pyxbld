@@ -1,9 +1,0 @@
-import numpy
-def make_ext(modname, pyxfilename):
-    from distutils.extension import Extension
-    import numpy
-    ext = Extension(name = 'calign',
-        sources=[pyxfilename],
-        include_dirs=['calign', numpy.get_include()],
-        extra_compile_args=['-Wall', '-O2', '-march=native'])
-    return ext

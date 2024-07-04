@@ -57,3 +57,4 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
                len(query), len(database), len(q16), len(d16),
                match, mismatch, gap_open, gap_extend,
                <cnp.uintp_t *> traceback.data)
+
