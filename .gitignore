@@ -7,3 +7,6 @@ tests/
 extern/
 AudiobooksList/
 *.egg-info
+.so
+dist/
+.ruff_cache/
