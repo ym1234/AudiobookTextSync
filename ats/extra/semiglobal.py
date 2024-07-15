@@ -1,75 +1,119 @@
-GAP_OPEN = -1
-GAP_EXTEND = -1
-MATCH = 1
-MISMATCH = -1
+import numpy as np
+from pprint import pprint
 
-def whatever(x, y):
-    h = [[0 for j in range(len(y)+1)] for i in range(len(x)+1)]
-    e = [[0 for j in range(len(y)+1)] for i in range(len(x)+1)]
-    f = [[0 for j in range(len(y)+1)] for i in range(len(x)+1)]
-    m = (0, 0)
-    for i in range(1, len(x)+1):
-        for j in range(1, len(y)+1):
-            score = MATCH if x[i-1] == y[j-1] else MISMATCH
-            e[i][j] = max(e[i][j-1]+GAP_EXTEND, h[i][j-1]+GAP_OPEN)
-            f[i][j] = max(f[i-1][j]+GAP_EXTEND, h[i-1][j]+GAP_OPEN)
-            h[i][j] = max(e[i][j], f[i][j], h[i-1][j-1]+score)
-            if h[i][j] >= h[m[0]][m[1]]:
-                m = (i, j)
-    return h, e, f
+def idk(cx, cy, m):
+    if m == 0:
+        return cx-1, cy-1
+    elif m == 1:
+        return cx-1, cy
+    else:
+        return cx, cy-1
 
-# x, y = "1234567890ABCDEF"*2, "1234567890ABCDEF"*2
-# x, y = "Hello hosetuhae world", "Hello lllllorld"
-# x, y = "1234567890ABCDEFHH", "1234567890ABCDEF"
-# x, y = 'TGTTACGG', 'GGTTGACTA'
-# x, y = '1'*32, '1'*32
-x, y = 'Hello world', 'Hello World'
-h, e, f = whatever(x, y[:5])
-for i in range(1, len(h)):
-    for j in range(1, len(h[i])):
-        print(f"{h[i][j]:02d} ", end='')
-    print()
+def get_traceback(h, cx, cy, recursive=False):
+    traceback = []
+    while cx > 0 and cy > 0:
+        traceback.append((cx, cy))
+        nodes = h[[cx-1, cx-1, cx], [cy-1, cy, cy-1]]
+        maxes = (nodes == nodes.max()).nonzero()[0]
+        if recursive and len(maxes) > 1:
+            tracebacks, added = [], False
+            for m in maxes:
+                tcx, tcy = idk(cx, cy, m)
+                if tcx == 0 or tcy == 0:
+                    if not added:
+                        tracebacks.append(traceback)
+                    added = True
+                    continue
 
-print()
-h, e, f = whatever(x[::-1], y[5:][::-1])
-for i in range(1, len(h)):
-    for j in range(1, len(h[i])):
-        print(f"{h[i][j]:02d} ", end='')
-    print()
+                z = get_traceback(h, tcx, tcy, recursive)
+                z = z if type(z[0]) is list else [z]
+                for k in z:
+                    tracebacks.append(traceback + k)
+            return tracebacks
+
+        cx, cy = idk(cx, cy, maxes[0])
+    return traceback
+
+def semiglobal(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, recursive=False):
+    lx, ly = len(x), len(y)
+
+    h = np.zeros((lx+1, ly+1))
+    e = np.zeros((lx+1, ly+1))
+    f = np.zeros((lx+1, ly+1))
+
+    # Gap extends being MORE than than gap opens doesn't make much sense
+    f[0, 1], h[0, 1] = gap_open, gap_open
+    for i in range(2, ly+1):
+        f[0, i] = f[0, i-1] + gap_extend
+        h[0, i] = f[0, i]
+
+    for i in range(1, lx+1):
+        for j in range(1, ly+1):
+            score = match if x[i-1] == y[j-1] else mismatch
+            e[i, j] = max(e[i, j-1]+gap_extend, h[i, j-1]+gap_open)
+            f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
+            h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
+
+    maximum = int(h[:, -1].argmax())
+    try:
+        traceback = get_traceback(h, maximum, ly, recursive)
+        traceback = np.array(traceback) # This isn't guaranteed to  be homogeneous
+        traceback = traceback[:, ::-1] if recursive else traceback[::-1]
+        traceback = traceback.swapaxes(-1, -2) - 1
+    except:
+        traceback = None
+
+    return traceback, h, e, f
+
+def semiglobal_print(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, recursive=False):
+    traceback = semiglobal(x, y, gap_open, gap_extend, match, mismatch, recursive)[0]
+    if not recursive: traceback = traceback.reshape(1, *traceback.shape)
+
+    x, y = np.array(list(x)), np.array(list(y))
+    for t1, t2 in traceback:
+        print(''.join(x[t1].tolist()))
+        print(''.join(y[t2].tolist()))
+        print()
 
 
-# 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01
-# 01 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02
-# 01 02 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03
-# 01 02 03 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04 04
-# 01 02 03 04 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05 05
-# 01 02 03 04 05 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06 06
-# 01 02 03 04 05 06 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07 07
-# 01 02 03 04 05 06 07 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08 08
-# 01 02 03 04 05 06 07 08 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09 09
-# 01 02 03 04 05 06 07 08 09 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10
-# 01 02 03 04 05 06 07 08 09 10 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11
-# 01 02 03 04 05 06 07 08 09 10 11 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13 13
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 14 14 14 14 14 14 14 14 14 14 14 14 14 14 14 14 14 14
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 15 15 15 15 15 15 15 15 15 15 15 15 15 15 15 15 15
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 16 16 16 16 16 16 16 16 16 16 16 16 16 16 16 16
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 18 18 18 18 18 18 18 18 18 18 18 18 18 18
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 19 19 19 19 19 19 19 19 19 19 19 19 19
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 20 20 20 20 20 20 20 20 20 20 20 20
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 21 21 21 21 21 21 21 21 21 21 21
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 22 22 22 22 22 22 22 22 22 22
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 23 23 23 23 23 23 23 23 23
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 24 24 24 24 24 24 24 24
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 25 25 25 25 25 25 25
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 26 26 26 26 26 26
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 27 27 27 27 27
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 28 28 28 28
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 29 29 29
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 30 30
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 31
-# 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+def lastcol(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
+    lx, ly = len(x), len(y)
+    h = np.zeros((lx+1))
+    e = np.zeros((lx+1))
+    f = np.zeros((lx+1))
+    h_prev = 0
 
+    for j in range(1, ly+1):
+        f[0] = gap_open + (j-1) * gap_extend
+        h_prev, h[0] = h[0], f[0]
+        for i in range(1, lx+1):
+            score = match if x[i-1] == y[j-1] else mismatch
+            e[i] = max(e[i]+gap_extend, h[i]+gap_open)
+            f[i] = max(f[i-1]+gap_extend, h[i-1]+gap_open)
+            th, h[i] = h[i], max(e[i], f[i], h_prev + score)
+    return h
 
+def hirschberg_inner(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
+    lx, ly = len(x), len(y)
+    if lx == 0:
+        return np.vstack((np.arange(len(y)), np.zeros(len(y)))).T
+    if ly == 0:
+        return np.vstack((np.arange(len(x)), np.zeros(len(x)))).T
+
+    if lx == 1:
+        return np.array([(0, lastcol(x, y, gap_open, gap_extend, match, mismatch).argmax()-1)])
+    if ly == 1:
+        return np.array([(lx - lastcol(y, x, gap_open, gap_extend, match, mismatch).argmax(), 0)])
+
+    f = lastcol(x, y[:ly//2], gap_open, gap_extend, match, mismatch)
+    s = lastcol(x[::-1], y[ly//2:][::-1], gap_open, gap_extend, match, mismatch)
+    mid = (f + s[::-1]).argmax()
+
+    return np.concatenate((hirschberg_inner(x[:mid], y[:ly//2], gap_open, gap_extend, match, mismatch),
+                           [(mid, ly//2)],
+                           np.array([(mid+1, ly//2+1)]) + hirschberg_inner(x[mid+1:], y[ly//2+1:], gap_open, gap_extend, match, mismatch)), axis=0)
+
+def hirschberg(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
+    last = lastcol(x, y, gap_open, gap_extend, match, mismatch)
+    return hirschberg_inner(x[:last.argmax()], y, gap_open, gap_extend, match, mismatch).T
 
