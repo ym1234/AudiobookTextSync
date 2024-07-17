@@ -76,7 +76,7 @@ def semiglobal_print(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, rec
         print()
 
 
-def lastcol(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
+def lastcol(x, y, match, mismatch, gap_open, gap_extend):
     lx, ly = len(x), len(y)
     h = np.zeros((lx+1))
     e = np.zeros((lx+1))
@@ -85,15 +85,15 @@ def lastcol(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
 
     for j in range(1, ly+1):
         f[0] = gap_open + (j-1) * gap_extend
-        h_prev, h[0] = h[0], f[0]
+        h[0], h_prev = f[0], h[0]
         for i in range(1, lx+1):
             score = match if x[i-1] == y[j-1] else mismatch
             e[i] = max(e[i]+gap_extend, h[i]+gap_open)
             f[i] = max(f[i-1]+gap_extend, h[i-1]+gap_open)
-            th, h[i] = h[i], max(e[i], f[i], h_prev + score)
+            h_prev, h[i] = h[i], max(e[i], f[i], h_prev + score)
     return h
 
-def hirschberg_inner(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
+def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     lx, ly = len(x), len(y)
     if lx == 0:
         return np.vstack((np.arange(len(y)), np.zeros(len(y)))).T
@@ -101,19 +101,22 @@ def hirschberg_inner(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
         return np.vstack((np.arange(len(x)), np.zeros(len(x)))).T
 
     if lx == 1:
-        return np.array([(0, lastcol(x, y, gap_open, gap_extend, match, mismatch).argmax()-1)])
+        return np.array([(0, lastcol(x, y, match, mismatch, gap_open, gap_extend).argmax()-1)])
     if ly == 1:
-        return np.array([(lx - lastcol(y, x, gap_open, gap_extend, match, mismatch).argmax(), 0)])
+        return np.array([(lx - lastcol(y, x, match, mismatch, gap_open, gap_extend).argmax(), 0)])
 
-    f = lastcol(x, y[:ly//2], gap_open, gap_extend, match, mismatch)
-    s = lastcol(x[::-1], y[ly//2:][::-1], gap_open, gap_extend, match, mismatch)
+    f = lastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
+    s = lastcol(x[::-1], y[ly//2:][::-1], match, mismatch, gap_open, gap_extend)
+    print(f)
+    print(s)
     mid = (f + s[::-1]).argmax()
 
-    return np.concatenate((hirschberg_inner(x[:mid], y[:ly//2], gap_open, gap_extend, match, mismatch),
+    return np.concatenate((hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend),
                            [(mid, ly//2)],
-                           np.array([(mid+1, ly//2+1)]) + hirschberg_inner(x[mid+1:], y[ly//2+1:], gap_open, gap_extend, match, mismatch)), axis=0)
+                           np.array([(mid+1, ly//2+1)]) + hirschberg_inner(x[mid+1:], y[ly//2+1:], match, mismatch, gap_open, gap_extend)), axis=0)
 
-def hirschberg(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1):
-    last = lastcol(x, y, gap_open, gap_extend, match, mismatch)
-    return hirschberg_inner(x[:last.argmax()], y, gap_open, gap_extend, match, mismatch).T
+def hirschberg(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
+    # last = lastcol(x, y, gap_open, gap_extend, match, mismatch).argmax()
+    last = len(x)
+    return hirschberg_inner(x[:last], y, match, mismatch, gap_open, gap_extend).T
 
