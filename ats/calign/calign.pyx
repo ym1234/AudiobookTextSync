@@ -33,17 +33,22 @@ cdef array_align(a: cnp.ndarray[cnp.uint16_t], n: int):
     return np.require(ret, requirements=['A', 'C', 'W', 'O', 'E'])
 
 
-cdef clastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int):
-    cdef cnp.ndarray[cnp.uint16_t] xa = np.require(array_align(x, SIMD_ELEM).reshape(SIMD_ELEM, -1).T.flatten(), requirements=['A', 'C', 'W', 'O', 'E'])
-    cdef cnp.ndarray[cnp.uint16_t] ya = np.require(y, requirements=['A', 'C', 'W', 'O', 'E'])
+cdef clastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int, reverse=False):
+    cdef cnp.ndarray[cnp.uint16_t] idk = array_align(x[::-1] , SIMD_ELEM).reshape(SIMD_ELEM, -1).T.flatten()
+    cdef cnp.ndarray[cnp.uint16_t] xa = np.require(idk, requirements=['A', 'C', 'W', 'O', 'E'])
+    cdef cnp.ndarray[cnp.uint16_t] ya = np.require(y[::-1] if reverse else y, requirements=['A', 'C', 'W', 'O', 'E'])
     cdef cnp.int16_t[:] ret = <cnp.int16_t[:len(xa)]> semiglobal(<cnp.uint16_t *>xa.data,
                                                                    len(xa),
                                                                    <cnp.uint16_t *>ya.data,
                                                                    len(ya),
                                                                    match, mismatch, gap_open, gap_extend)
-    return np.asarray(ret).reshape(-1, SIMD_ELEM).T.flatten()[:len(x)]
+    idk2 = np.asarray(ret).reshape(-1, SIMD_ELEM).T.flatten()
+    return idk2[len(idk)-len(x):] if reverse else idk2[:len(x)]
 
-def lastcol(x, y, match, mismatch, gap_open, gap_extend):
+def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
+    if reverse:
+        x = x[::-1]
+        y = y[::-1]
     lx, ly = len(x), len(y)
     h = np.zeros((lx+1), np.int64)
     e = np.zeros((lx+1), np.int64)
@@ -74,10 +79,10 @@ cdef hirschberg_inner(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t]
 
     if use_c:
         f = clastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
-        s = clastcol(x[::-1], y[ly//2:][::-1], match, mismatch, gap_open, gap_extend)
+        s = clastcol(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
     else:
         f = lastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
-        s = lastcol(x[::-1], y[ly//2:][::-1], match, mismatch, gap_open, gap_extend)
+        s = lastcol(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
 
     # Better way to deal with this?
     idk = (f[:-1] + s[:-1][::-1])

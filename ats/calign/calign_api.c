@@ -171,7 +171,7 @@ int16_t *semiglobal(uint16_t *query, uint32_t query_len,  uint16_t *database, ui
   __m256i Min = _mm256_set1_epi16(gapopen);
   /* __m256i Min = _mm256_set1_epi16(INT16_MIN); */
   for (int i = 0; i < stride; i++) {
-    pvE[i] = Min;
+    pvE[i] = vNegLimit;
   }
 
   __m256i * pvHLoad = (__m256i *)  mmap(0, align(query_len * sizeof(int16_t), 4096), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -237,7 +237,7 @@ int16_t *semiglobal(uint16_t *query, uint32_t query_len,  uint16_t *database, ui
      * then deletion, so don't update E(i, i), learn from SWPS3 */
     for (int k=0; k< 16; ++k) {
       /* int64_t tmp = s2_beg ? -open : (boundary[j+1]-open); */
-      int64_t tmp = 2*gapopen + j*gapextend;
+      int64_t tmp = gapopen + j*gapextend;
       int16_t tmp2 = tmp < INT16_MIN ? INT16_MIN : tmp;
       vF = _mm256_slli_si256_rpl(vF, 2);
       vF = _mm256_insert_epi16(vF, tmp2, 0);
@@ -247,7 +247,7 @@ int16_t *semiglobal(uint16_t *query, uint32_t query_len,  uint16_t *database, ui
         _mm256_store_si256(pvHStore + i, vH);
         vH = _mm256_adds_epi16(vH, vGapO);
         vF = _mm256_adds_epi16(vF, vGapE);
-        if (! _mm256_movemask_epi8(_mm256_cmpgt_epi16(vF, vH))) goto end;
+        /* if (! _mm256_movemask_epi8(_mm256_cmpgt_epi16(vF, vH))) goto end; */
         /* vF = _mm256_max_epi16(vF, vH); */
       }
     }
