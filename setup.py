@@ -13,7 +13,7 @@ ext = Extension(name = 'ats.calign.calign',
                 sources=['ats/calign/calign.pyx'],
                 include_dirs=[np.get_include()],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-                extra_compile_args=['-march=skylake']) # -O2
+                extra_compile_args=['-g', '-march=native']) # -O2
 
 setup(name='ats',
       version='1.2.0',

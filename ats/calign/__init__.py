@@ -1,1 +1,1 @@
-from .calign import pyhirschberg
+from .calign import *

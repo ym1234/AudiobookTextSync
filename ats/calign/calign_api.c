@@ -60,7 +60,7 @@ static inline size_t align(size_t n, size_t alignment) {
 // Can this be even faster than the serial version? It has all the no-nos that simd people don't recommend
 // This is probably memory bandwidth limited anyway
 // ALSO ALSO You need an extra +1 because you are using *i32*gather (you can use a different mask too ig)
-static void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t len) {
+static void stride_seq(uint16_t * restrict ret, uint16_t * restrict seq, size_t len) {
   size_t stride = len / SIMD_ELEM;
   __m256i vStride = _mm256_mullo_epi32(_mm256_set1_epi32(stride), _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0));
   __m256i Mask = _mm256_set_epi16(0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff,0x00, 0xff, 0x00, 0xff,0x00, 0xff, 0x00, 0xff);
@@ -84,7 +84,7 @@ static void stride_seq(uint16_t * restrict seq, uint16_t * restrict ret, size_t 
 // TODO https://stackoverflow.com/questions/40919766/unaligned-load-versus-unaligned-store
 // https://lwn.net/Articles/255364/
 // Although the biggest problem here is permute2x128 probably
-static void reverse16(uint16_t * restrict s,  uint16_t * restrict r, size_t len, size_t alen) {
+static void reverse16(uint16_t * restrict r, uint16_t * restrict s, size_t len, size_t alen) {
   __m256i ShuffleMask = _mm256_set_epi8(
         1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14,
         1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14
@@ -108,32 +108,32 @@ static void reverse16(uint16_t * restrict s,  uint16_t * restrict r, size_t len,
 // https://davmac.wordpress.com/2013/08/07/what-restrict-really-means/
 // Looking at code gen it doesn't seem to make much of a difference
 typedef struct AlignmentState {
-  __m256i * restrict vHMin;
-  __m256i * restrict vEMin;
-  uint16_t * restrict database_reversed;
+  __m256i * vHMin;
+  __m256i * vEMin;
+  uint16_t * database_reversed;
 
-  __m256i * restrict pvHLoad;
-  __m256i * restrict pvHStore;
-  __m256i * restrict pvHLoad2;
+  __m256i * pvHLoad;
+  __m256i * pvHStore;
+  __m256i * pvHLoad2;
 
-  __m256i * restrict pvE;
-  __m256i * restrict pvE2;
+  __m256i * pvE;
+  __m256i * pvE2;
 
-  __m256i * restrict query;
-  __m256i * restrict query_reversed;
+  __m256i * query;
+  __m256i * query_reversed;
 } AlignmentState;
 
 
 typedef struct AlignmentParams {
-  __m256i * restrict vHMin;
-  __m256i * restrict pvHLoad;
-  __m256i * restrict pvHStore;
+  __m256i * vHMin;
+  __m256i * pvHLoad;
+  __m256i * pvHStore;
 
-  __m256i * restrict vEMin;
-  __m256i * restrict pvE;
+  __m256i * vEMin;
+  __m256i * pvE;
 
-  __m256i * restrict query;
-  uint16_t * restrict database;
+  __m256i * query;
+  uint16_t * database;
   size_t query_len;
   size_t database_len;
 } AlignmentParams;
@@ -148,10 +148,115 @@ typedef struct Result {
 /* int semiglobal_scan(uint16_t * restrict x, size_t lx, uint16_t * restrict y, size_t ly) { */
 /* } */
 
-// Return the last column
-// TODO change h and e sizes depending on lx and ly
-// lx and ly are assumed to be aligned
-void semiglobal(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend) {
+void print256_num(char *str, __m256i var)
+{
+    uint16_t val[16];
+    memcpy(val, &var, sizeof(val));
+    printf("%s: %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX %04hX\n", str,
+           val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7],
+           val[8], val[9], val[10], val[11], val[12], val[13], val[14], val[15]);
+}
+
+int16_t *semiglobal(uint16_t *query, uint32_t query_len,  uint16_t *database, uint32_t database_len, int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend) {
+  size_t stride = query_len / SIMD_ELEM;
+  __m256i vMatch = _mm256_set1_epi16(match);
+  __m256i vMismatch = _mm256_set1_epi16(mismatch);
+  __m256i vGapO = _mm256_set1_epi16(gapopen);
+  __m256i vGapE = _mm256_set1_epi16(gapextend);
+
+  __m256i vNegLimit = _mm256_set1_epi16(INT16_MIN);
+
+  __m256i * pvE = (__m256i *) mmap(0, query_len * sizeof(int16_t), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+
+  __m256i Min = _mm256_set1_epi16(gapopen);
+  /* __m256i Min = _mm256_set1_epi16(INT16_MIN); */
+  for (int i = 0; i < stride; i++) {
+    pvE[i] = Min;
+  }
+
+  __m256i * pvHLoad = (__m256i *)  mmap(0, align(query_len * sizeof(int16_t), 4096), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+  __m256i * pvHStore = (__m256i *) mmap(0, align(query_len * sizeof(int16_t), 4096), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+
+  __m256i *q = (__m256i *) query;
+
+  /* outer loop over database sequence */
+  for (int j = 0; j < database_len; j++) {
+    __m256i vY = _mm256_set1_epi16(database[j]);
+    __m256i vE;
+    /* Initialize F value to -inf.  Any errors to vH values will be
+     * corrected in the Lazy_F loop.  */
+    __m256i vF = vNegLimit;
+
+    /* load final segment of pvHStore and shift left by 2 bytes */
+    __m256i vH = _mm256_slli_si256_rpl(pvHStore[stride - 1], 2);
+
+    /* Swap the 2 H buffers. */
+    __m256i* pv = pvHLoad;
+    pvHLoad = pvHStore;
+    pvHStore = pv;
+
+    /* insert upper boundary condition */
+    /* vH = _mm256_insert_epi16(vH, boundary[j], 0); */
+    vH = _mm256_insert_epi16(vH, 0, 0);
+    if (j != 0) {
+      vH = _mm256_insert_epi16(vH, gapopen+(j-1)*gapextend, 0);
+    }
+
+    /* inner loop to process the query sequence */
+    for (int i = 0; i < stride; i++) {
+      __m256i vX = _mm256_load_si256(q + j);
+      __m256i vCmp = _mm256_cmpeq_epi16(vY, vX);
+      __m256i MatchScore = _mm256_and_si256(vCmp, vMatch);
+      __m256i MismatchScore =_mm256_andnot_si256(vCmp, vMismatch);
+      __m256i vScore = _mm256_or_si256(MatchScore, MismatchScore);
+
+      vH = _mm256_adds_epi16(vH, vScore);
+      vE = _mm256_load_si256(pvE + i);
+
+      /* Get max from vH, vE and vF. */
+      vH = _mm256_max_epi16(vH, vE);
+      vH = _mm256_max_epi16(vH, vF);
+      /* Save vH values. */
+      _mm256_store_si256(pvHStore + i, vH);
+
+      /* Update vE value. */
+      vH = _mm256_adds_epi16(vH, vGapO);
+      vE = _mm256_adds_epi16(vE, vGapE);
+      vE = _mm256_max_epi16(vE, vH);
+      _mm256_store_si256(pvE + i, vE);
+
+      /* Update vF value. */
+      vF = _mm256_adds_epi16(vF, vGapE);
+      vF = _mm256_max_epi16(vF, vH);
+
+      /* Load the next vH. */
+      vH = _mm256_load_si256(pvHLoad + i);
+    }
+
+    /* Lazy_F loop: has been revised to disallow adjecent insertion and
+     * then deletion, so don't update E(i, i), learn from SWPS3 */
+    for (int k=0; k< 16; ++k) {
+      /* int64_t tmp = s2_beg ? -open : (boundary[j+1]-open); */
+      int64_t tmp = 2*gapopen + j*gapextend;
+      int16_t tmp2 = tmp < INT16_MIN ? INT16_MIN : tmp;
+      vF = _mm256_slli_si256_rpl(vF, 2);
+      vF = _mm256_insert_epi16(vF, tmp2, 0);
+      for (int i=0; i<stride; ++i) {
+        vH = _mm256_load_si256(pvHStore + i);
+        vH = _mm256_max_epi16(vH,vF);
+        _mm256_store_si256(pvHStore + i, vH);
+        vH = _mm256_adds_epi16(vH, vGapO);
+        vF = _mm256_adds_epi16(vF, vGapE);
+        if (! _mm256_movemask_epi8(_mm256_cmpgt_epi16(vF, vH))) goto end;
+        /* vF = _mm256_max_epi16(vF, vH); */
+      }
+    }
+end:
+  }
+  return (int16_t *) pvHStore;
+}
+
+void semiglobal2(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend) {
   __m256i vMatch = _mm256_set1_epi16(match);
   __m256i vMismatch = _mm256_set1_epi16(mismatch);
   __m256i vGapO = _mm256_set1_epi16(gapopen);
@@ -181,6 +286,7 @@ void semiglobal(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t
       __m256i MatchScore = _mm256_and_si256(vCmp, vMatch);
       __m256i MismatchScore =_mm256_andnot_si256(vCmp, vMismatch);
       __m256i vScore = _mm256_or_si256(MatchScore, MismatchScore);
+
       vH = _mm256_adds_epi16(vH, vScore);
 
       __m256i vE = pvELoad[j];
@@ -201,49 +307,11 @@ void semiglobal(AlignmentParams *state, int16_t match, int16_t mismatch, int16_t
       vH = pvHLoad[j];
     }
 
-    /* int j = 0; */
-    /* vH = pvHStore[j]; */
-    /* vF = _mm256_slli_si256_rpl(vF, 2); */
-    /* vF = _mm256_insert_epi16(vF, INT16_MIN, 0); */
-    /* __m256i vTemp = _mm256_adds_epi16(vH, vGapO); */
-    /* vTemp = _mm256_cmpgt_epi16(vF, vTemp); */
-    /* int cmp = _mm256_movemask_epi8(vTemp); */
-    /* size_t counter = 0; */
-    /* int loops = 0; */
-    /* while (cmp != 0x0000) { */
-    /*   counter += 1; */
-    /*   __m256i vE = pvEStore[j]; */
-    /*   vH = _mm256_max_epi16(vH, vF); */
-    /*   pvHStore[j] = vH; */
-
-    /*   vH = _mm256_adds_epi16(vH, vGapO); */
-    /*   pvEStore[j] = _mm256_max_epi16(vE, vH); */
-
-    /*   vF = _mm256_adds_epi16(vF, vGapE); */
-
-    /*   j++; */
-    /*   if (j >= stride) { */
-    /*     j = 0; */
-    /*     vF = _mm256_slli_si256_rpl(vF, 2); */
-    /*     vF = _mm256_insert_epi16(vF, INT16_MIN, 0); */
-    /*     loops += 1; */
-    /*   } */
-
-    /*   vH = pvHStore[j]; */
-    /*   vTemp = _mm256_adds_epi16(vH, vGapO); */
-    /*   vTemp = _mm256_cmpgt_epi16(vF, vTemp); */
-    /*   cmp = _mm256_movemask_epi8(vTemp); */
-    /* } */
-    /* printf("counter: %d, loops: %d\n", counter, loops); */
-
     //  Copied from parasail
-    //  This seems to produce "Wrong" results in a few places, and i'm not whether that's intentional or not (or a bug?)
-    //  ie wether it doesn't affect the traceback score
-    //  It probably biases the traceback to take a certain shape (without changing the score) but i'm not sure
     for (int k = 0; k < SIMD_ELEM; ++k) {
         vF = _mm256_slli_si256_rpl(vF, 2);
         /* vF = _mm256_insert_epi16(vF, INT16_MIN, 0); */
-        vF = _mm256_insert_epi16(vF, (i-1)*gapextend+2*gapopen, 0);
+        /* vF = _mm256_insert_epi16(vF, i*gapextend+2*gapopen, 0); */
         /* vF = _mm256_insert_epi16(vF, gapopen, 0); */
         for (int j = 0; j < stride; ++j) {
             vH = _mm256_max_epi16(pvHStore[j], vF);
@@ -296,7 +364,7 @@ uint32_t hmax_index(const __m256i v) {
     __m256i vcmp = _mm256_cmpeq_epi16(v, vmax);
     int16_t *l = (int16_t *) &vmax;
     printf("MAX %d\n", l[0]);
-    /* for (int i 0; i < 16; i++) { */
+    /* for (int i = 0; i < 16; i++) { */
     /* } */
 
     uint32_t mask = _mm256_movemask_epi8(vcmp);
@@ -313,17 +381,17 @@ void hirschberg_internal(
     AlignmentState *state, Result *result, size_t alloc_size
 ) {
 
-  printf("%p QOriginal: ", x);
+  printf(" %p QOriginal: ", x);
   for (int i = 0; i < alx; i++) {
     printf("%d, ", ((int16_t *) x)[i]);
   }
   printf("\n %p QStrided: ", state->query);
-  stride_seq(x, (uint16_t *) state->query, alx);
+  stride_seq((uint16_t *) state->query, x, alx);
   for (int i = 0; i < alx; i++) {
     printf("%d, ", ((int16_t *) state->query)[i]);
   }
   printf("\n %p QReversed: ", state->query_reversed);
-  reverse16((uint16_t *) state->query, (uint16_t *) state->query_reversed, lx, alx);
+  reverse16((uint16_t *) state->query_reversed, (uint16_t *) state->query, lx, alx);
   for (int i = 0; i < alx; i++) {
     printf("%d, ", ((int16_t *) state->query_reversed)[i]);
   }
@@ -341,13 +409,14 @@ void hirschberg_internal(
     /* .database = ry, */
     .database = y,
     .query_len = alx,
-    .database_len = ly,
+    .database_len = ly/2,
   };
-  printf("len db %d\n", params.database_len);
-  semiglobal(&params, match, mismatch, gapopen, gapextend);
+  /* printf("len db %d\n", params.database_len); */
+  /* semiglobal(&params, match, mismatch, gapopen, gapextend); */
   __m256i *n1 = params.pvHLoad;
 
   printf("First Split: ");
+  print256_num("idk", n1[0]);
   for (int i = 0; i < alx; i++) {
       result->traceback[i] = ((int16_t *) n1)[i];
       result->ltrace += 1;
@@ -404,7 +473,7 @@ Result hirschberg(
     int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend,
     size_t *traceback
 ) {
-  Result r = (struct Result) {
+  Result r = {
     .traceback = traceback,
     .ltrace = 0,
     .score = 0
@@ -434,18 +503,17 @@ Result hirschberg(
   state.query = state.pvE2 + bstride;
   state.query_reversed = state.query + bstride;
 
-  /* __m256i Min = _mm256_set1_epi16(gapopen); */
-  __m256i Min = _mm256_set1_epi16(INT16_MIN);
+  __m256i Min = _mm256_set1_epi16(gapopen);
+  /* __m256i Min = _mm256_set1_epi16(INT16_MIN); */
   for (int i = 0; i < bstride; i++) {
     state.vEMin[i] = Min;
-    _mm256_store_si256(state.vEMin+i, Min);
   }
 
   printf(" %p DBOriginal: ", y);
   for (int i = 0; i < aly; i++) {
     printf("%d, ", y[i]);
   }
-  reverse16(y, state.database_reversed, ly, aly);
+  reverse16(state.database_reversed, y, ly, aly);
   printf("\n %p DBReversed: ", state.database_reversed);
   for (int i = 0; i < aly; i++) {
     printf("%d, ", state.database_reversed[i]);

@@ -110,6 +110,9 @@ def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     print(f)
     print(s)
     mid = (f + s[::-1]).argmax()
+    print(s[::-1])
+    print(f + s[::-1])
+    print(mid)
 
     return np.concatenate((hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend),
                            [(mid, ly//2)],
