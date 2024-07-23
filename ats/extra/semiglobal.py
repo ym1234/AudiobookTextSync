@@ -34,18 +34,17 @@ def get_traceback(h, cx, cy, recursive=False):
         cx, cy = idk(cx, cy, maxes[0])
     return traceback
 
-def semiglobal(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, recursive=False):
+def semiglobal(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, recursive=False, end=False):
     lx, ly = len(x), len(y)
 
     h = np.zeros((lx+1, ly+1))
-    e = np.zeros((lx+1, ly+1))
-    f = np.zeros((lx+1, ly+1))
+    e = np.full((lx+1, ly+1), fill_value=-np.inf)
+    f = np.full((lx+1, ly+1), fill_value=-np.inf)
 
     # Gap extends being MORE than than gap opens doesn't make much sense
-    f[0, 1], h[0, 1] = gap_open, gap_open
-    for i in range(2, ly+1):
-        f[0, i] = f[0, i-1] + gap_extend
-        h[0, i] = f[0, i]
+    for i in range(1, ly+1):
+        e[0, i] = max(e[0, i-1]+gap_extend, h[0, i-1]+gap_open)
+        h[0, i] = e[0, i]
 
     for i in range(1, lx+1):
         for j in range(1, ly+1):
@@ -54,7 +53,7 @@ def semiglobal(x, y, gap_open=-1, gap_extend=-1, match=1, mismatch=-1, recursive
             f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
             h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
 
-    maximum = int(h[:, -1].argmax())
+    maximum = lx if end else int(h[:, -1].argmax())
     try:
         traceback = get_traceback(h, maximum, ly, recursive)
         traceback = np.array(traceback) # This isn't guaranteed to  be homogeneous
