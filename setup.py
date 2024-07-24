@@ -9,11 +9,19 @@ directory = Path(__file__).resolve().parent
 with open(directory / 'README.md', encoding='utf-8') as f:
   long_description = f.read()
 
-ext = Extension(name = 'ats.calign.calign',
-                sources=['ats/calign/calign.pyx'],
-                include_dirs=[np.get_include()],
-                define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-                extra_compile_args=['-g', '-march=native']) # -O2
+calign = Extension(name='ats.calign.calign',
+                   sources=['ats/calign/calign.pyx'],
+                   include_dirs=[np.get_include()],
+                   define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+                   extra_compile_args=['-march=native', '-fopenmp'],  # -g, -O2
+                   extra_link_args=['-fopenmp'])
+
+hirschberg = Extension(name='ats.extra.hirschberg',
+                       sources=['ats/extra/hirschberg.pyx'],
+                       include_dirs=[np.get_include()],
+                       define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+                       extra_compile_args=['-march=native', "-O2"])
+
 
 setup(name='ats',
       version='1.2.0',
@@ -24,7 +32,7 @@ setup(name='ats',
       long_description=long_description,
       long_description_content_type='text/markdown',
       packages = ['ats', 'ats.calign'],
-      ext_modules=cythonize(ext),
+      ext_modules=cythonize([calign, hirschberg], language_level="3"),
       classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License"
