@@ -141,28 +141,23 @@ def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
 
     j =  f + s[::-1]
     k =  fe + se[::-1] - gap_open
-    # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
-    mid, mid2 = j.argmax(), len(k) - k[::-1].argmax() - 1
+    mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
 
-    if mid == mid2 or j[mid] >= k[mid2]:
+    if j[mid] >= k[mid2]:
         split1 = hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend)
         split2 = hirschberg_inner(x[mid:], y[ly//2:], match, mismatch, gap_open, gap_extend)
         return np.concatenate([split1, np.array([[mid], [ly//2]]) + split2], axis=1)
-    else:
-        print("HERE", mid2, k[mid2], mid, j[mid])
-        split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)
-        split2 = hirschberg_inner(x[mid2:], y[ly//2+1:], match, mismatch, gap_open, gap_extend)
-        return np.concatenate([split1, np.array([[mid2], [ly//2-1]]), np.array([[mid2], [ly//2]]), np.array([[mid2], [ly//2+1]]) + split2], axis=1)
+
+    print("HERE", mid2, k[mid2], mid, j[mid])
+    split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)
+    split2 = hirschberg_inner(x[mid2:], y[ly//2+1:], match, mismatch, gap_open, gap_extend)
+    return np.concatenate([split1, np.array([[mid2-1], [ly//2-1]]), np.array([[mid2-1], [ly//2]]), np.array([[mid2], [ly//2+1]]) + split2], axis=1)
 
 
 def pyhirschberg(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1, end=False):
-    if end:
-        start = 0
-        last = len(x)
-    else:
-        last = slastcol(x, y, match, mismatch, gap_open, gap_extend)
-        last = last.argmax()
-        start = slastcol(x[:last], y, match, mismatch, gap_open, gap_extend, reverse=True)
-        start = last - start.argmax()
+    start, last = 0, len(x)
+    if not end:
+        last = slastcol(x, y, match, mismatch, gap_open, gap_extend).argmax()
+        start = last - slastcol(x[:last], y, match, mismatch, gap_open, gap_extend, reverse=True).argmax()
     return np.array([[start], [0]]) + hirschberg_inner(x[start:last], y, match, mismatch, gap_open, gap_extend)
 
