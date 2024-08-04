@@ -151,7 +151,7 @@ void hirschberg_internal(
   }
   int col = idx/SIMD_ELEM;
   int row = idx%SIMD_ELEM;
-  printf("\n%d\n",  col * (alx/SIMD_ELEM) + row);
+  printf("\n%d\n",  col*(alx/SIMD_ELEM) + row);
 }
 
 

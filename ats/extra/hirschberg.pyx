@@ -97,7 +97,7 @@ cdef hirschberg_inner(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t]
                            [(mid, ly//2)],
                            np.array([(mid+1, ly//2+1)]) + hirschberg_inner(x[mid+1:], y[ly//2+1:], match, mismatch, gap_open, gap_extend, lastcol)), axis=0)
 
-def hirschberg(query:str, database:str, match:int=1, mismatch:int=-1, gap_open:int=-1, gap_extend:int=-1, lastcol=lastcol):
+def chirschberg(query:str, database:str, match:int=1, mismatch:int=-1, gap_open:int=-1, gap_extend:int=-1, lastcol=lastcol):
     cdef cnp.ndarray[cnp.uint32_t] query_np = np.frombuffer(query.encode('utf-32le'), dtype=np.uint32)
     cdef cnp.ndarray[cnp.uint32_t] database_np = np.frombuffer(database.encode('utf-32le'), dtype=np.uint32)
 

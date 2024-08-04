@@ -50,9 +50,6 @@ from faster_whisper import WhisperModel
 
 from rapidfuzz import fuzz
 
-from bs4 import element
-from bs4 import BeautifulSoup
-
 from os.path import basename, splitext
 import time
 

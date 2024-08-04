@@ -58,8 +58,6 @@ def test_reverse16_2(x: cnp.ndarray[cnp.uint16_t]):
 
 def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, gap_open: int = -1, gap_extend: int = -1):
     # le very important otherwise you get the BOM or w/e
-    # We don't support big endian lul
-    # np.dtype(int).np.newbyteorder('>')
     cdef cnp.ndarray[cnp.uint32_t] query_np = np.frombuffer(query.encode('utf-32le'), dtype=np.uint32)
     cdef cnp.ndarray[cnp.uint32_t] database_np = np.frombuffer(database.encode('utf-32le'), dtype=np.uint32)
 
@@ -73,7 +71,7 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
     cdef cnp.ndarray[cnp.intp_t] traceback = np.zeros(len(q) + len(d), dtype=np.intp)
 
     result = hirschberg(<cnp.uint16_t *> q.data, <cnp.uint16_t *> d.data,
-               len(query), len(database), len(q)-1, len(d)-1,
+               len(query), len(database), len(q), len(d),
                match, mismatch, gap_open, gap_extend,
                <int64_t *> traceback.data)
     return result.score, traceback[:result.ltrace].reshape(-1, 16).T.flatten()[:len(query)] # For debugging for now
