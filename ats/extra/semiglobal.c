@@ -121,7 +121,7 @@ end:
     /* printf("count %d\n", count); */
   }
 
-  munmap(pvHLoad, align(bufsz, 4096));
-  munmap(pvE, align(bufsz, 4096));
+  munmap(pvHLoad, bufsz);
+  munmap(pvE, bufsz);
   return (int16_t *) pvHStore;
 }

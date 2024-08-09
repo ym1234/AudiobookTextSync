@@ -15,12 +15,12 @@ def traceback(x, y, H, E, F, cx, cy, match, mismatch, gap_open, gap_extend, star
                 cx, cy = cx-1, cy-1
         elif cur == 1:
             traceback.append((cx, cy))
-            if (H[cx, cy-1] + gap_open) == E[cx, cy]:
+            if (H[cx, cy-1] + gap_open) == E[cx, cy] and (E[cx, cy-1] + gap_extend) != E[cx, cy]:
                 cur = 0
             cy -= 1
         elif cur == 2:
             traceback.append((cx, cy))
-            if (H[cx-1, cy] + gap_open) == F[cx, cy]:
+            if (H[cx-1, cy] + gap_open) == F[cx, cy] and (F[cx-1, cy] + gap_extend) != F[cx, cy]:
                 cur = 0
             cx -= 1
 
@@ -54,8 +54,9 @@ def semiglobal(x, y, match=-1, mismatch=-1, gap_open=-1, gap_extend=-1, recursiv
             f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
             h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
 
-    cx = lx if end else h[:, -1].T.argmax()
-    return traceback(x, y, h, e, f, cx, ly, match, mismatch, gap_open, gap_extend)
+    return h, e, f
+    # cx = lx if end else h[:, -1].T.argmax()
+    # return traceback(x, y, h, e, f, cx, ly, match, mismatch, gap_open, gap_extend)
 
 def tracep(x, y, trace):
     x, y = np.array(list(x)), np.array(list(y))
@@ -106,7 +107,6 @@ def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
             h_prev, h[i] = h[i], max(e[i], f, h_prev + score)
     return h, e
 
-
 def nw(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
     lx, ly = len(x), len(y)
 
@@ -133,7 +133,7 @@ def nw(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
 
 def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     lx, ly = len(x), len(y)
-    if lx < 3 or ly < 3:
+    if lx < 2 or ly < 2:
         return nw(x, y, match, mismatch, gap_open, gap_extend)
 
     f, fe = lastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
@@ -141,23 +141,73 @@ def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
 
     j =  f + s[::-1]
     k =  fe + se[::-1] - gap_open
-    mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
+    # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
+    mid, mid2 = j.argmax(), k.argmax()
 
     if j[mid] >= k[mid2]:
         split1 = hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend)
         split2 = hirschberg_inner(x[mid:], y[ly//2:], match, mismatch, gap_open, gap_extend)
         return np.concatenate([split1, np.array([[mid], [ly//2]]) + split2], axis=1)
 
-    print("HERE", mid2, k[mid2], mid, j[mid])
     split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)
     split2 = hirschberg_inner(x[mid2:], y[ly//2+1:], match, mismatch, gap_open, gap_extend)
     return np.concatenate([split1, np.array([[mid2-1], [ly//2-1]]), np.array([[mid2-1], [ly//2]]), np.array([[mid2], [ly//2+1]]) + split2], axis=1)
 
+# Check if this is correct?
+def tracecheck(x, y, trace, H, E, F, match, mismatch, gap_open, gap_extend, start=False):
+    trace = trace.T
+    cx, cy = trace[-1]
+    cur, idx = 0, 1
+    while idx < trace.shape[0] and cx >= 0 and cy >= 0:
+        nx, ny = trace[trace.shape[0] - idx - 1]
+        if cur == 0:
+            score = match if x[cx] == y[cy] else mismatch
+            if nx == cx-1 and ny == cy-1:
+                if (H[nx+1, ny+1] + score) != H[cx+1, cy+1]:
+                    return idx
+            elif nx == cx and ny == cy-1:
+                if H[cx+1, cy+1] != E[cx+1, cy+1]:
+                    return idx
+                cur = 1
+                continue
+            elif nx == cx-1 and ny == cy:
+                if H[cx+1, cy+1] != F[cx+1, cy+1]:
+                    return idx
+                cur = 2
+                continue
+            else:
+                return idx
+        elif cur == 1:
+            if nx != cx or ny != cy - 1:
+                return idx
+            if H[nx+1, ny+1] + gap_open == E[cx+1, cy+1]:
+                cur = 0
+            elif E[nx+1, ny+1] + gap_extend == E[cx+1, cy+1]:
+                pass
+            else:
+                return idx
+        elif cur == 2:
+            if nx != cx - 1 or ny != cy:
+                return idx
+            if H[nx+1, ny+1] + gap_open == F[cx+1, cy+1]:
+                cur = 0
+            elif F[nx+1, ny+1] + gap_extend == F[cx+1, cy+1]:
+                pass
+            else:
+                return idx
+        cx, cy = nx, ny
+        idx += 1
+    return True
 
 def pyhirschberg(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1, end=False):
     start, last = 0, len(x)
     if not end:
         last = slastcol(x, y, match, mismatch, gap_open, gap_extend).argmax()
         start = last - slastcol(x[:last], y, match, mismatch, gap_open, gap_extend, reverse=True).argmax()
-    return np.array([[start], [0]]) + hirschberg_inner(x[start:last], y, match, mismatch, gap_open, gap_extend)
-
+    trace = np.array([[start], [0]]) + hirschberg_inner(x[start:last], y, match, mismatch, gap_open, gap_extend)
+    if not end:
+        h, e, f = semiglobal(x, y, match, mismatch, gap_open, gap_extend, end=end)
+        if (k := tracecheck(x, y, trace, h, e, f, match, mismatch, gap_open, gap_extend)) != True:
+            print(trace)
+            raise Exception(f"Bad trace {k}")
+    return trace

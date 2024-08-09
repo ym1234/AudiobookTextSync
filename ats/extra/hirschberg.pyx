@@ -1,17 +1,24 @@
 from libc.stdint cimport int64_t, uint16_t, int16_t, uint32_t
 from libc.stddef cimport size_t
 
+from posix.mman cimport munmap
+
 import numpy as np
 cimport numpy as cnp
 cnp.import_array()
 
 import parasail
 
-cdef extern from "hirschberg_api.c":
+cdef extern from "semiglobal.c":
     size_t SIMD_ELEM
     int16_t *semiglobal(uint16_t *x, uint32_t lx, uint16_t *y, uint32_t ly,
                       int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend)
     size_t align(size_t, size_t)
+
+cdef extern from "needleman.c":
+    int16_t *needleman(uint16_t *x, uint32_t lx, uint16_t *y, uint32_t ly,
+                      int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend,
+                      int16_t **rH, int16_t **rE)
 
 cdef array_align(a: cnp.ndarray[cnp.uint16_t], n: int):
     # print(len(a), align(len(a), n))
@@ -19,34 +26,40 @@ cdef array_align(a: cnp.ndarray[cnp.uint16_t], n: int):
     ret[:len(a)] = a
     return np.require(ret, requirements=['A', 'C', 'W', 'O', 'E'])
 
-def clastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int, reverse=False):
+def sclastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int, reverse=False):
     cdef cnp.ndarray[cnp.uint16_t] idk = array_align(x[::-1] if reverse else x , SIMD_ELEM).reshape(SIMD_ELEM, -1).T.flatten()
     cdef cnp.ndarray[cnp.uint16_t] xa = np.require(idk, requirements=['A', 'C', 'W', 'O', 'E'])
+    cdef int z = len(xa)
     cdef cnp.ndarray[cnp.uint16_t] ya = np.require(y[::-1] if reverse else y, requirements=['A', 'C', 'W', 'O', 'E'])
     cdef cnp.int16_t[:] ret = <cnp.int16_t[:len(xa)]> semiglobal(<cnp.uint16_t *>xa.data,
                                                                    len(xa),
                                                                    <cnp.uint16_t *>ya.data,
                                                                    len(ya),
                                                                    match, mismatch, gap_open, gap_extend)
+    # https://cython.readthedocs.io/en/latest/src/userguide/memoryviews.html#cython-arrays
+    # ret.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
     idk2 = np.asarray(ret).reshape(-1, SIMD_ELEM).T.flatten()
     return idk2[:len(x)]
 
-def plastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int, reverse=False):
-    if reverse:
-        x = x[::-1]
-        y = y[::-1]
-    x = ''.join([chr(i) for i in x])
-    y = ''.join([chr(i) for i in y])
+def nw(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, mismatch: int, gap_open: int, gap_extend:int, reverse=False):
+    cdef int16_t *H = NULL
+    cdef int16_t *E = NULL
 
-    alphabet = ''.join(np.union1d(list(x), list(y)))
-    matrix = parasail.matrix_create(alphabet, match=match, mismatch=mismatch)
-    r = parasail.sg_qx_rowcol_striped_16(x, y, open=abs(gap_open), extend=abs(gap_extend), matrix=matrix)
-    return np.copy(r.score_col) # Need the copy for weird ctypes/gc reasons
+    cdef cnp.ndarray[cnp.uint16_t] idk = array_align(x[::-1] if reverse else x , SIMD_ELEM).reshape(SIMD_ELEM, -1).T.flatten()
+    cdef cnp.ndarray[cnp.uint16_t] xa = np.require(idk, requirements=['A', 'C', 'W', 'O', 'E'])
+    cdef int z = len(xa)
+    cdef cnp.ndarray[cnp.uint16_t] ya = np.require(y[::-1] if reverse else y, requirements=['A', 'C', 'W', 'O', 'E'])
+    needleman(<cnp.uint16_t *>xa.data, len(xa), <cnp.uint16_t *>ya.data, len(ya), match, mismatch, gap_open, gap_extend, &H, &E)
+
+    cdef cnp.int16_t[:] mH = <cnp.int16_t[:len(xa)]> H
+    cdef cnp.int16_t[:] mE = <cnp.int16_t[:len(xa)]> E
+    # mH.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
+    # mE.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
+    return np.asarray(mH).reshape(-1, SIMD_ELEM).T.flatten()[:len(x)], np.asarray(mE).reshape(-1, SIMD_ELEM).T.flatten()[:len(x)]
 
 def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
     if reverse:
-        x = x[::-1]
-        y = y[::-1]
+        x, y = x[::-1], y[::-1]
     lx, ly = len(x), len(y)
     h = np.zeros((lx+1), dtype=np.int64)
     e = np.zeros((lx+1), dtype=np.int64)
@@ -63,39 +76,92 @@ def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
             h_prev, h[i] = h[i], max(e[i], f[i], h_prev + score)
     return h[1:]
 
-cdef hirschberg_inner(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match:int, mismatch:int, gap_open:int, gap_extend:int, lastcol):
+def traceback(x, y, H, E, F, cx, cy, match, mismatch, gap_open, gap_extend, start=False):
+    cur, traceback = 0, []
+    while cx > 0 and cy > 0:
+        if cur == 0:
+            score = match if x[cx-1] == y[cy-1] else mismatch
+            if H[cx, cy] == E[cx, cy]:
+                cur = 1
+            elif H[cx, cy] == F[cx, cy]:
+                cur = 2
+            elif (H[cx-1, cy-1] + score) == H[cx, cy]:
+                traceback.append((cx, cy))
+                cx, cy = cx-1, cy-1
+        elif cur == 1:
+            traceback.append((cx, cy))
+            if (H[cx, cy-1] + gap_open) == E[cx, cy] and (E[cx, cy-1] + gap_extend) != E[cx, cy]:
+                cur = 0
+            cy -= 1
+        elif cur == 2:
+            traceback.append((cx, cy))
+            if (H[cx-1, cy] + gap_open) == F[cx, cy] and (F[cx-1, cy] + gap_extend) != F[cx, cy]:
+                cur = 0
+            cx -= 1
+
+    if start:
+        while cx > 0:
+            traceback.append((cx, cy))
+            cx -= 1
+
+        while cy > 0:
+            traceback.append((cx, cy))
+            cy -= 1
+
+    return np.array(traceback)[::-1].swapaxes(-1, -2)-1
+
+def nw_full(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
     lx, ly = len(x), len(y)
-    if lx == 0:
-        return np.vstack((np.arange(len(y)), np.zeros(len(y)))).T
-    if ly == 0:
-        return np.vstack((np.arange(len(x)), np.zeros(len(x)))).T
 
-    if lx == 1:
-        return np.array([(0, lastcol(x, y, match, mismatch, gap_open, gap_extend).argmax())])
-    if ly == 1:
-        return np.array([(lx - lastcol(y, x, match, mismatch, gap_open, gap_extend).argmax()-1, 0)])
+    h = np.zeros((lx+1, ly+1))
+    e = np.full((lx+1, ly+1), fill_value=-np.inf)
+    f = np.full((lx+1, ly+1), fill_value=-np.inf)
 
-    f = lastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
-    s = lastcol(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
+    for i in range(1, ly+1):
+        e[0, i] = max(e[0, i-1]+gap_extend, h[0, i-1]+gap_open)
+        h[0, i] = e[0, i]
 
-    # Better way to deal with this?
-    idk = (f[:-1] + s[:-1][::-1])
-    mid = idk.argmax()
+    for i in range(1, lx+1):
+        f[i, 0] = max(f[i-1, 0]+gap_extend, h[i-1, 0]+gap_open)
+        h[i, 0] = f[i, 0]
+
+    for i in range(1, lx+1):
+        for j in range(1, ly+1):
+            score = match if x[i-1] == y[j-1] else mismatch
+            e[i, j] = max(e[i, j-1]+gap_extend, h[i, j-1]+gap_open)
+            f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
+            h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
+
+    return traceback(x, y, h, e, f, lx, ly, match, mismatch, gap_open, gap_extend, start=True)
+
+def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
+    lx, ly = len(x), len(y)
+    if lx < 2 or ly < 2:
+        return nw_full(x, y, match, mismatch, gap_open, gap_extend)
+
+    f, fe = nw(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
     print(f)
-    print(s)
+    s, se = nw(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
 
-    ns = np.array([idk[mid], s[-1] + gap_open + (ly//2 - 1) * gap_extend, f[-1] + gap_open + (len(y) - ly//2 - 1) * gap_extend]).argmax()
+    j =  f[:-1] + s[:-1][::-1]
+    k =  fe[:-1] + se[:-1][::-1] - gap_open
+    # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
+    mid, mid2 = j.argmax()+1, k.argmax()+1
+    ns = np.array([j[mid-1], k[mid2-1], s[-1] + gap_open + (ly//2 - 1) * gap_extend, f[-1] + gap_open + (len(y) - ly//2 - 1) * gap_extend]).argmax()
+
     if ns == 1:
-        mid = -1
-    elif ns == 2:
-        mid = len(x)-1
+        split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)
+        split2 = hirschberg_inner(x[mid2:], y[ly//2+1:], match, mismatch, gap_open, gap_extend)
+        return np.concatenate([split1, np.array([[mid2-1], [ly//2-1]]), np.array([[mid2-1], [ly//2]]), np.array([[mid2], [ly//2+1]]) + split2], axis=1)
 
-    print(mid)
-    mid += 1
+    if ns == 2:
+        mid = 0
+    elif ns == 3:
+        mid = len(x)
 
-    return np.concatenate((hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend, lastcol),
-                           [(mid, ly//2)],
-                           np.array([(mid+1, ly//2+1)]) + hirschberg_inner(x[mid+1:], y[ly//2+1:], match, mismatch, gap_open, gap_extend, lastcol)), axis=0)
+    split1 = hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend)
+    split2 = hirschberg_inner(x[mid:], y[ly//2:], match, mismatch, gap_open, gap_extend)
+    return np.concatenate([split1, np.array([[mid], [ly//2]]) + split2], axis=1)
 
 def chirschberg(query:str, database:str, match:int=1, mismatch:int=-1, gap_open:int=-1, gap_extend:int=-1, lastcol=lastcol):
     cdef cnp.ndarray[cnp.uint32_t] query_np = np.frombuffer(query.encode('utf-32le'), dtype=np.uint32)
@@ -108,5 +174,7 @@ def chirschberg(query:str, database:str, match:int=1, mismatch:int=-1, gap_open:
     cdef cnp.ndarray[cnp.uint16_t] q = np.searchsorted(alphabet, query_np).astype(np.uint16) + 1 # +1 For parasail, which uses \0 terminated strings
     cdef cnp.ndarray[cnp.uint16_t] d = np.searchsorted(alphabet, database_np).astype(np.uint16) + 1
 
-    return hirschberg_inner(q, d, match, mismatch, gap_open, gap_extend, lastcol).T
+    # return nw(q, d, match, mismatch, gap_open, gap_extend)
+    return hirschberg_inner(q, d, match, mismatch, gap_open, gap_extend) #.T
+
 
