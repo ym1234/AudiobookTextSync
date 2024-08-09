@@ -23,7 +23,7 @@ int16_t *semiglobal(
     uint16_t *database, uint32_t database_len,
     int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend
 ) {
-  size_t stride = query_len / SIMD_ELEM;
+  int stride = query_len / SIMD_ELEM;
   __m256i vMatch = _mm256_set1_epi16(match);
   __m256i vMismatch = _mm256_set1_epi16(mismatch);
   __m256i vGapO = _mm256_set1_epi16(gapopen);

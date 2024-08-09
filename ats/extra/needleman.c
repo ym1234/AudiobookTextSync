@@ -4,7 +4,7 @@ void needleman(
     int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend,
     int16_t **rH, int16_t **rE
 ) {
-  size_t stride = query_len / SIMD_ELEM;
+  int stride = query_len / SIMD_ELEM;
   __m256i vMatch = _mm256_set1_epi16(match);
   __m256i vMismatch = _mm256_set1_epi16(mismatch);
   __m256i vGapO = _mm256_set1_epi16(gapopen);
@@ -18,13 +18,17 @@ void needleman(
   __m256i *pvHLoad  = (__m256i *) mmap(0, bufsz, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   __m256i *pvHStore = (__m256i *) mmap(0, bufsz, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
-  // Doesn't handle saturation
-  for (int i = 0; i < stride; i++) {
-    __m256i T = _mm256_set_epi16(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
-    T = _mm256_mullo_epi16(_mm256_set1_epi16(stride*gapextend), T);
-    T =_mm256_adds_epi16(_mm256_set1_epi16(i*gapextend), T);
-    pvHStore[i] = _mm256_adds_epi16(T, vGapO);
-    pvEStore[i] = _mm256_adds_epi16(pvHStore[i], vGapO);
+  {
+    int16_t J[16];
+    for (int i = 0; i < 16; i++) {
+      J[i] = (int16_t) (i * stride * gapextend < INT16_MIN ? INT16_MIN : i * stride * gapextend);
+    }
+    __m256i T = _mm256_load_si256((__m256i *) J);
+    for (int i = 0; i < stride; i++) {
+      __m256i J =_mm256_adds_epi16(_mm256_set1_epi16(i * gapextend < INT16_MIN ? INT16_MIN : i * gapextend), T);
+      pvHStore[i] = _mm256_adds_epi16(J, vGapO);
+      pvEStore[i] = _mm256_adds_epi16(pvHStore[i], vGapO);
+    }
   }
 
   __m256i *q = (__m256i *) query;
