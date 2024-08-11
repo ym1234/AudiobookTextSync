@@ -1,5 +1,5 @@
-#ifndef __CALIGN_H__
-#define __CALIGN_H__
+#ifndef __HIRSCHBERG_H__
+#define __HIRSCHBERG_H__
 
 #define SIMD_WIDTH ((int) 256)
 #define SIMD_WIDTH_BYTES (SIMD_WIDTH/8)

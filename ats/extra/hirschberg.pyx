@@ -2,6 +2,8 @@ from libc.stdint cimport int64_t, uint16_t, int16_t, uint32_t
 from libc.stddef cimport size_t
 
 from posix.mman cimport munmap
+from cython cimport view
+import ctypes
 
 import numpy as np
 cimport numpy as cnp
@@ -36,7 +38,6 @@ def sclastcol(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match:
                                                                    <cnp.uint16_t *>ya.data,
                                                                    len(ya),
                                                                    match, mismatch, gap_open, gap_extend)
-    # https://cython.readthedocs.io/en/latest/src/userguide/memoryviews.html#cython-arrays
     # ret.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
     idk2 = np.asarray(ret).reshape(-1, SIMD_ELEM).T.flatten()
     return idk2[:len(x)]
@@ -51,11 +52,20 @@ def nw(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, m
     cdef cnp.ndarray[cnp.uint16_t] ya = np.require(y[::-1] if reverse else y, requirements=['A', 'C', 'W', 'O', 'E'])
     needleman(<cnp.uint16_t *>xa.data, len(xa), <cnp.uint16_t *>ya.data, len(ya), match, mismatch, gap_open, gap_extend, &H, &E)
 
-    cdef cnp.int16_t[:] mH = <cnp.int16_t[:len(xa)]> H
-    cdef cnp.int16_t[:] mE = <cnp.int16_t[:len(xa)]> E
-    # mH.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
-    # mE.callback_free_data = lambda x: munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
-    return np.asarray(mH).reshape(-1, SIMD_ELEM).T.flatten()[:len(x)], np.asarray(mE).reshape(-1, SIMD_ELEM).T.flatten()[:len(x)]
+    cdef view.array mH = <cnp.int16_t[:len(xa)]> H
+    cdef view.array mE = <cnp.int16_t[:len(xa)]> E
+    # Idk why this isn't working, tried to tie it to a module-level object so that the gc doesn't kill it but...
+    # https://cython.readthedocs.io/en/latest/src/userguide/memoryviews.html#cython-arrays
+    # def free(x):
+    #     munmap(<void *>x, align(z * sizeof(uint16_t), 4096))
+    # f = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(free)
+    # cdef (void (*)(void *) noexcept) ptr = (<void (*)(void *) noexcept><size_t>ctypes.addressof(refs[-1]))
+    # mH.callback_free_data = ptr
+    # mE.callback_free_data = ptr
+    vH, vE = np.asarray(mH).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)], np.asarray(mE).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)]
+    munmap(H,  align(z * sizeof(int16_t), 4096))
+    munmap(E,  align(z * sizeof(int16_t), 4096))
+    return vH, vE
 
 def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
     if reverse:
@@ -134,20 +144,39 @@ def nw_full(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
 
     return traceback(x, y, h, e, f, lx, ly, match, mismatch, gap_open, gap_extend, start=True)
 
+# Debug
+# Have actual tests?
+# def do_parasail(x, y, match, mismatch, gap_open, gap_extend):
+#     import parasail
+#     matrix = parasail.matrix_create(''.join(list(np.union1d(x, y))), match=match, mismatch=mismatch, case_sensitive=True)
+#     r = parasail.nw_rowcol_striped_16(x, y, open=abs(gap_open), extend=abs(gap_extend), matrix=matrix)
+#     return np.copy(r.score_col)
+
+# def do_nw(x, y, match, mismatch, gap_open, gap_extend):
+#     query_np = np.frombuffer(x.encode('utf-32le'), dtype=np.uint32)
+#     database_np = np.frombuffer(y.encode('utf-32le'), dtype=np.uint32)
+#     alphabet = np.union1d(query_np, database_np)
+#     q = np.searchsorted(alphabet, query_np).astype(np.uint16) + 1
+#     d = np.searchsorted(alphabet, database_np).astype(np.uint16) + 1
+#     return extra.nw(q, d, match, mismatch, gap_open, gap_extend)[0]
+
 def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     lx, ly = len(x), len(y)
     if lx < 2 or ly < 2:
         return nw_full(x, y, match, mismatch, gap_open, gap_extend)
 
     f, fe = nw(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
-    print(f)
     s, se = nw(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
 
+    # return f, s
     j =  f[:-1] + s[:-1][::-1]
     k =  fe[:-1] + se[:-1][::-1] - gap_open
+    # print(j)
+    # print(k)
     # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
     mid, mid2 = j.argmax()+1, k.argmax()+1
     ns = np.array([j[mid-1], k[mid2-1], s[-1] + gap_open + (ly//2 - 1) * gap_extend, f[-1] + gap_open + (len(y) - ly//2 - 1) * gap_extend]).argmax()
+    print(mid, j[mid-1], mid2, k[mid2-1], ns)
 
     if ns == 1:
         split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)

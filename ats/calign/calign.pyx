@@ -7,7 +7,7 @@ import numpy as np
 cimport numpy as cnp
 cnp.import_array()
 
-cdef extern from "calign_api.c":
+cdef extern from "hirschberg.c":
     cdef struct AlignmentParams:
         pass
 
@@ -17,8 +17,8 @@ cdef extern from "calign_api.c":
         int64_t score
 
     size_t SIMD_ELEM
-    void stride_seq(uint16_t *ret, uint16_t *seq, size_t len)
-    void reverse16(uint16_t * r, uint16_t * s, size_t len)
+    void stride_seq(uint16_t *, uint16_t *, size_t, size_t)
+    void reverse16(uint16_t *, uint16_t *, size_t)
     Result hirschberg(uint16_t *x, uint16_t *y,
                       size_t lx, size_t ly, size_t alx, size_t aly,
                       int16_t match, int16_t mismatch, int16_t gapopen, int16_t gapextend,
@@ -35,7 +35,7 @@ cdef array_align(a: cnp.ndarray[cnp.uint16_t], n: int):
 def test_stride(x: cnp.ndarray[cnp.uint16_t]):
     cdef cnp.ndarray[cnp.uint16_t] xa = array_align(x, SIMD_ELEM)
     cdef cnp.ndarray[cnp.uint16_t] out = np.zeros(len(xa), dtype=xa.dtype)
-    stride_seq(<cnp.uint16_t *>out.data, <cnp.uint16_t *>xa.data, len(xa))
+    stride_seq(<cnp.uint16_t *>out.data, <cnp.uint16_t *>xa.data, len(x), len(xa))
 
     return np.all(out[:-1] == xa[:-1].reshape(SIMD_ELEM, -1).T.flatten())
 
@@ -65,8 +65,8 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
     if len(alphabet) > 2**16:
         raise Exception("Doesn't support alphabet sizes more than 2**16")
 
-    cdef cnp.ndarray[cnp.uint16_t] q = array_align(np.searchsorted(alphabet, query_np).astype(np.uint16)   , SIMD_ELEM)
-    cdef cnp.ndarray[cnp.uint16_t] d = array_align(np.searchsorted(alphabet, database_np).astype(np.uint16), SIMD_ELEM)
+    cdef cnp.ndarray[cnp.uint16_t] q = array_align(np.searchsorted(alphabet, query_np).astype(np.uint16)   , SIMD_ELEM) + 1 # use 0 as padding
+    cdef cnp.ndarray[cnp.uint16_t] d = array_align(np.searchsorted(alphabet, database_np).astype(np.uint16), SIMD_ELEM) + 1
 
     cdef cnp.ndarray[cnp.intp_t] traceback = np.zeros(len(q) + len(d), dtype=np.intp)
 
