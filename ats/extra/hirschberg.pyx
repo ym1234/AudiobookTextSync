@@ -176,7 +176,7 @@ def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
     mid, mid2 = j.argmax()+1, k.argmax()+1
     ns = np.array([j[mid-1], k[mid2-1], s[-1] + gap_open + (ly//2 - 1) * gap_extend, f[-1] + gap_open + (len(y) - ly//2 - 1) * gap_extend]).argmax()
-    print(mid, j[mid-1], mid2, k[mid2-1], ns)
+    # print(mid, j[mid-1], mid2, k[mid2-1], ns)
 
     if ns == 1:
         split1 = hirschberg_inner(x[:mid2], y[:ly//2-1], match, mismatch, gap_open, gap_extend)
@@ -205,5 +205,6 @@ def chirschberg(query:str, database:str, match:int=1, mismatch:int=-1, gap_open:
 
     # return nw(q, d, match, mismatch, gap_open, gap_extend)
     return hirschberg_inner(q, d, match, mismatch, gap_open, gap_extend) #.T
+
 
 

@@ -3,50 +3,67 @@
 
 #define SIMD_WIDTH ((int) 256)
 #define SIMD_WIDTH_BYTES (SIMD_WIDTH/8)
-#define ELEM_WIDTH ((int) 16)
-#define ELEM_WIDTH_BYTES (ELEM_WIDTH / 8)
-#define SIMD_ELEM (SIMD_WIDTH/ELEM_WIDTH)
 
-// All the restricts because I don't understand how this shit works wtf
-// UB hellscape
+// Parasail
+// 3 or 2 doesn't really matter
+// permute 2x128 checks the highest bit in the nibble and if it's set then it writes zeros
+// _MM_SHUFFLE = x << 6 | y << 4 | z << 2 | f
+#define _mm256_slli_si256_rpl(a,imm)  _mm256_alignr_epi8(a, _mm256_permute2x128_si256(a, a, _MM_SHUFFLE(0,0,2,0)), 16-imm)
+#define _mm256_srli_si256_rpl(a,imm)  _mm256_alignr_epi8(_mm256_permute2x128_si256(a, a, _MM_SHUFFLE(2,0,0,0)), a, imm)
+
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+
+#define max(a, b) ((b) > (a) ? (b) : (a))
+#define min(a, b) ((a) > (b) ? (b) : (a))
+
+__attribute__ ((always_inline))
+static inline size_t align(size_t n, size_t alignment) {
+  size_t a = alignment - 1;
+  return (n+a) & ~a;
+}
+
 // https://www.dii.uchile.cl/~daespino/files/Iso_C_1999_definition.pdf 6.7.3.1
 // https://davmac.wordpress.com/2013/08/07/what-restrict-really-means/
-// Looking at code gen it doesn't seem to make much of a difference
-typedef struct AlignmentState {
-  __m256i * restrict vHMin;
-  __m256i * restrict vEMin;
-  uint16_t * database_reversed;
+typedef struct Buffers {
+  uint32_t *restrict DatabaseR;
 
-  __m256i * restrict pvHLoad;
-  __m256i * restrict pvHStore;
-  __m256i * restrict pvHLoad2;
+  union {
+    struct {
+      uint32_t *restrict Query;
+      uint32_t *restrict QueryR;
+    };
+    struct {
+      __m256i *restrict vQuery;
+      __m256i *restrict vQueryR;
+    };
+  };
 
-  __m256i * restrict pvE;
-  __m256i * restrict pvE2;
+  int64_t allocsize;
+  union {
+    struct {
+      __m256i *restrict vHLoad;
+      __m256i *restrict vHLoad2;
+      __m256i *restrict vHStore;
+      __m256i *restrict vHStore2;
 
-  __m256i * restrict query;
-  __m256i * restrict query_reversed;
-} AlignmentState;
+      __m256i *restrict vEStore;
+      __m256i *restrict vELoad;
+      __m256i *restrict vEStore2;
+      __m256i *restrict vELoad2;
+    };
+    struct {
+      int32_t *restrict HLoad;
+      int32_t *restrict HLoad2;
+      int32_t *restrict HStore;
+      int32_t *restrict HStore2;
 
-
-typedef struct AlignmentParams {
-  __m256i * restrict vHMin;
-  __m256i * restrict pvHLoad;
-  __m256i * restrict pvHStore;
-
-  __m256i * restrict vEMin;
-  __m256i * restrict pvE;
-
-  __m256i * query;
-  uint16_t * database;
-  size_t query_len;
-  size_t database_len;
-} AlignmentParams;
-
-typedef struct Result {
-  size_t *traceback;
-  size_t ltrace;
-  int64_t score;
-} Result;
+      int32_t *restrict ELoad;
+      int32_t *restrict EStore;
+      int32_t *restrict ELoad2;
+      int32_t *restrict EStore2;
+    };
+  };
+} Buffers;
 
 #endif
