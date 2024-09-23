@@ -22,11 +22,9 @@ def pyhirschberg(query: str, database: str, match: int = 1, mismatch: int = -1, 
     cdef cnp.ndarray[cnp.uint32_t] q = np.frombuffer(query.encode('utf-32le'), dtype=np.uint32)
     cdef cnp.ndarray[cnp.uint32_t] d = np.frombuffer(database.encode('utf-32le'), dtype=np.uint32)
 
-    cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(len(q) + len(d), dtype=np.int64)
+    cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(len(q)*2 + len(d)*2, dtype=np.int64)
     tracelen: int64_t = 0
     score = hirschberg(<cnp.uint32_t *> q.data, <cnp.uint32_t *> d.data,
                         len(q), len(d), match, mismatch, gap_open, gap_extend,
-                        <int64_t *> traceback.data, &tracelen, 1*(1024**3))
-    return traceback[:tracelen], score
-
-
+                        <int64_t *> traceback.data, &tracelen, 4*(1024**3))
+    return traceback[:tracelen].reshape(-1, 2)[::-1].T

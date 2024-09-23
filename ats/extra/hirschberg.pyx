@@ -62,7 +62,7 @@ def nw(x: cnp.ndarray[cnp.uint16_t], y: cnp.ndarray[cnp.uint16_t], match: int, m
     # cdef (void (*)(void *) noexcept) ptr = (<void (*)(void *) noexcept><size_t>ctypes.addressof(refs[-1]))
     # mH.callback_free_data = ptr
     # mE.callback_free_data = ptr
-    vH, vE = np.asarray(mH).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)], np.asarray(mE).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)]
+    vH, vE = np.asarray(mH).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)].astype(np.int64), np.asarray(mE).copy().reshape(-1, SIMD_ELEM).T.flatten()[:len(x)].astype(np.int64)
     munmap(H,  align(z * sizeof(int16_t), 4096))
     munmap(E,  align(z * sizeof(int16_t), 4096))
     return vH, vE

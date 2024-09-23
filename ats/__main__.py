@@ -245,7 +245,9 @@ def to_epub():
     pass
 
 def to_subs(text, subs, alignment, offset, references):
+    pprint(alignment)
     alignment = [t + [i] for i, a in enumerate(alignment) for t in a]
+    pprint(alignment)
     start, end = 0, 0
     segments = []
     for si, s in enumerate(subs):
@@ -485,6 +487,7 @@ def main():
     print("Loading...")
     audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=whole) for f in args.pop('audio')))
     text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+    print(text[0].chapters[2])
 
     print('Transcribing...')
     s = time.monotonic()

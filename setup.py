@@ -13,7 +13,7 @@ calign = Extension(name='ats.calign.calign',
                    sources=['ats/calign/calign.pyx'],
                    include_dirs=[np.get_include()],
                    define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-                   extra_compile_args=['-march=native', '-fopenmp'],  # -g, -O2
+                   extra_compile_args=['-march=native', '-fopenmp', '-O2', '-g'],  # -g, -O2
                    extra_link_args=['-fopenmp'])
 
 hirschberg = Extension(name='ats.extra.hirschberg',

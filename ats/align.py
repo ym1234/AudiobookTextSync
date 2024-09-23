@@ -1,10 +1,47 @@
 import numpy as np
 import sys
 import calign
+import extra
 from Bio import Align
 from Bio.Align import substitution_matrices
 from pprint import pprint
 from tqdm import tqdm
+
+def align_sub2(coords, text, subs):
+    # coords = np.maximum(0, coords)
+    print(coords[:, :50])
+    tbound = np.cumsum([0] + [len(t) for t in text])
+    sbound = np.cumsum([0] + [len(s) for s in subs])
+    tboundidx = np.searchsorted(coords[0], tbound)
+    sboundidx = np.searchsorted(coords[1], sbound)
+    print(tboundidx)
+    print(sboundidx)
+    ret = [] # len(sidk)
+    tpstart, tpend = 0, 0
+    for i in range(1, len(sboundidx)):
+        while sboundidx[i] >= tboundidx[tpend]:
+            tpend += 1
+        print(coords[0, sboundidx[i]])
+        print(tpend, coords[0, tboundidx[tpend-1]])
+        # print(tindices[tpend], tindices[tpend-1], tidk[tpend])
+        tpstart = tpend
+        # break
+    # cursor = 0
+    # sumcur = 0
+    # ret = []
+    # for i in range(len(subs)-1):
+    #     start, end = idk[i], idk[i+1]
+    #     tstart, tend = coords[0, [start, end]]
+    #     while (sumcur+len(text[cursor])) < tstart:
+    #         sumcur += len(text[cursor])
+    #         cursor += 1
+    #     rstart = tstart - sumcur
+    #     rend = tend - sumcur
+    #     ret.append([])
+    #     if rend > len(text[cursor]):
+    #         pass
+
+    exit(0)
 
 def align_sub(coords, text, subs, thing=2):
     current = [0, 0]
@@ -156,7 +193,7 @@ def fix(lang, original, edited, segments):
 
 # This is structured like this to deal with references later
 def align(model, lang, transcript, text, references, prepend, append, nopend):
-    aligner = Align.PairwiseAligner(mode='global', match_score=1, open_gap_score=-0.8, mismatch_score=-0.6, extend_gap_score=-0.5)
+    # aligner = Align.PairwiseAligner(mode='global', match_score=1, open_gap_score=-0.8, mismatch_score=-0.6, extend_gap_score=-0.5)
 
     transcript_clean = [lang.clean(i) for i in transcript]
     transcript_joined = ''.join(transcript_clean)
@@ -165,11 +202,15 @@ def align(model, lang, transcript, text, references, prepend, append, nopend):
         text_clean = [lang.clean(i) for i in text]
         text_joined = ''.join(text_clean)
 
-        if not len(text_joined) or not len(transcript_joined): return []
-        alignment = aligner.align(text_joined, transcript_joined)[0]
-        coords = alignment.coordinates
 
-        segments = align_sub(coords, text_clean, transcript_clean)
+        if not len(text_joined) or not len(transcript_joined): return []
+        # coords = calign.pyhirschberg(text_joined, transcript_joined, match=2, mismatch=-2, gap_open=-2, gap_extend=-1)
+        coords = extra.chirschberg(text_joined, transcript_joined, match=1, mismatch=-2, gap_open=-2, gap_extend=-1)
+        print(coords)
+        # alignment = aligner.align(text_joined, transcript_joined)[0]
+        # coords = alignment.coordinates
+
+        segments = align_sub2(coords, text_clean, transcript_clean)
         fix(lang, text, text_clean, segments)
         fix_punc(text, segments, prepend, append, nopend)
         return segments

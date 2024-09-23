@@ -85,7 +85,7 @@ class EpubParagraph:
     def text(self):
         return ''.join(self.element.stripped_strings)
 
-TEXT_TAGS = ["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]
+TEXT_TAGS = ["p", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]
 @dataclass(eq=True, frozen=True)
 class EpubChapter:
     content: BeautifulSoup

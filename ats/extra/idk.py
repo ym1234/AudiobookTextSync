@@ -218,11 +218,11 @@ def scan(query, database):
             vW = np.maximum(vH - gap_open, vW - gap_extend)
         # print()
 
-        print(vF)
+        # print(vF)
         vW = np.maximum.accumulate(vF + k) - k
         vW[1:] = vW[:-1]
         vW[0] = -2*gap_open - i*gap_extend
-        print(vW)
+        # print(vW)
         pH, H = H, pH
 
     for j in range(vQuery.shape[0]):
@@ -242,10 +242,11 @@ def do_parasail_striped(x, y):
 
 
 def do_parasail_scan(x, y):
-    x = ''.join(alphabet[x.astype(int)])
-    y = ''.join(alphabet[y.astype(int)])
-    matrix = parasail.matrix_create(''.join(list(np.union1d(x, y))), match=match, mismatch=-mismatch, case_sensitive=True)
-    r = parasail.nw_rowcol_scan_16(x, y, open=abs(gap_open), extend=abs(gap_extend), matrix=matrix)
+    x = (alphabet[x.astype(int)])
+    y = (alphabet[y.astype(int)])
+    alpha2 = ''.join(list(np.union1d(x, y)))
+    matrix = parasail.matrix_create(alpha2, match=match, mismatch=-mismatch, case_sensitive=True)
+    r = parasail.nw_rowcol_scan_16(''.join(x), ''.join(y), open=abs(gap_open), extend=abs(gap_extend), matrix=matrix)
     return np.copy(r.score_col).astype(float).reshape(SIMD_ELEM, -1).T
 
 
@@ -265,13 +266,13 @@ database = np.random.randint(0, 10, size=dl).astype(float)
 s1 = scan(query, database)
 sp = do_parasail_scan(query, database)
 r = s1 == sp
-# print(r)
-query = "heLLOZZZZZ"*5
-database = "Hello"*6
-alphabet = np.union1d(list(query), list(database))
-query = np.searchsorted(alphabet, list(query)) + 1
-database = np.searchsorted(alphabet, list(database)) + 1
-scan(padto(query), padto(database))
+print(r)
+# query = "heLLOZZZZZ"*5
+# database = "Hello"*6
+# alphabet = np.union1d(list(query), list(database))
+# query = np.searchsorted(alphabet, list(query)) + 1
+# database = np.searchsorted(alphabet, list(database)) + 1
+# scan(padto(query), padto(database))
 # r = striped(query, database) == do_parasail_striped(query, database)
 # print(s1)
 # print(sp)
@@ -283,31 +284,33 @@ scan(padto(query), padto(database))
 # np.set_printoptions(linewidth=500)
 
 
-# def nw_full(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
-#     lx, ly = len(x), len(y)
+def nw_full(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
+    lx, ly = len(x), len(y)
 
-#     h = np.zeros((lx+1, ly+1))
-#     e = np.full((lx+1, ly+1), fill_value=-np.inf)
-#     f = np.full((lx+1, ly+1), fill_value=-np.inf)
+    h = np.zeros((lx+1, ly+1))
+    e = np.full((lx+1, ly+1), fill_value=-np.inf)
+    f = np.full((lx+1, ly+1), fill_value=-np.inf)
 
-#     for i in range(1, ly+1):
-#         e[0, i] = max(e[0, i-1]+gap_extend, h[0, i-1]+gap_open)
-#         h[0, i] = e[0, i]
+    for i in range(1, ly+1):
+        e[0, i] = max(e[0, i-1]+gap_extend, h[0, i-1]+gap_open)
+        h[0, i] = e[0, i]
 
-#     for i in range(1, lx+1):
-#         f[i, 0] = max(f[i-1, 0]+gap_extend, h[i-1, 0]+gap_open)
-#         h[i, 0] = f[i, 0]
+    for i in range(1, lx+1):
+        f[i, 0] = max(f[i-1, 0]+gap_extend, h[i-1, 0]+gap_open)
+        h[i, 0] = f[i, 0]
 
-#     for i in range(1, lx+1):
-#         for j in range(1, ly+1):
-#             score = match if x[i-1] == y[j-1] else mismatch
-#             e[i, j] = max(e[i, j-1]+gap_extend, h[i, j-1]+gap_open)
-#             f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
-#             h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
+    for i in range(1, lx+1):
+        for j in range(1, ly+1):
+            score = match if x[i-1] == y[j-1] else mismatch
+            e[i, j] = max(e[i, j-1]+gap_extend, h[i, j-1]+gap_open)
+            f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
+            h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
 
-#     return f
-#     # return h
-#     # return traceback(x, y, h, e, f, lx, ly, match, mismatch, gap_open, gap_extend, start=True)
+    # return f
+    return h
+    # return traceback(x, y, h, e, f, lx, ly, match, mismatch, gap_open, gap_extend, start=True)
+
+# print(nw_full([0]
 # query = ''.join(alphabet[query.astype(int)])
 # database = ''.join(alphabet[database.astype(int)])
 # f = nw_full(query, database, match=10, mismatch=-5, gap_extend=-3, gap_open=-8)
