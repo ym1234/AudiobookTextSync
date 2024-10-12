@@ -6,6 +6,8 @@ def traceback(x, y, H, E, F, cx, cy, match, mismatch, gap_open, gap_extend, star
     while cx > 0 and cy > 0:
         if cur == 0:
             score = match if x[cx-1] == y[cy-1] else mismatch
+            # print(x[cx-1], y[cy-1])
+            # print(score)
             if H[cx, cy] == E[cx, cy]:
                 cur = 1
             elif H[cx, cy] == F[cx, cy]:
@@ -64,24 +66,33 @@ def tracep(x, y, trace):
     print(''.join(y[trace[1]].tolist()))
     print()
 
-def slastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
-    if reverse:
-        x = x[::-1]
-        y = y[::-1]
-    lx, ly = len(x), len(y)
-    h = np.zeros((lx+1,))
-    e = np.full((lx+1,), fill_value=-np.inf)
-    h_prev = 0
+# def do_parasail(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
+#     if reverse:
+#         x = x[::-1]
+#         y = y[::-1]
+#     import parasail
+#     matrix = parasail.matrix_create(''.join(list(np.union1d(list(x), list(y)))), match=match, mismatch=mismatch, case_sensitive=True)
+#     r = parasail.nw_rowcol_striped_16(x, y, open=abs(gap_open), extend=abs(gap_extend), matrix=matrix)
+#     return np.copy(r.score_col)
 
-    for j in range(1, ly+1):
-        f = -np.inf
-        h_prev, h[0] = h[0], gap_open + (j-1) * gap_extend
-        for i in range(1, lx+1):
-            score = match if x[i-1] == y[j-1] else mismatch
-            e[i] = max(e[i]+gap_extend, h[i]+gap_open)
-            f = max(f+gap_extend, h[i-1]+gap_open)
-            h_prev, h[i] = h[i], max(e[i], f, h_prev + score)
-    return h
+# def slastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
+#     if reverse:
+#         x = x[::-1]
+#         y = y[::-1]
+#     lx, ly = len(x), len(y)
+#     h = np.zeros((lx+1,))
+#     e = np.full((lx+1,), fill_value=-np.inf)
+#     h_prev = 0
+
+#     for j in range(1, ly+1):
+#         f = -np.inf
+#         h_prev, h[0] = h[0], gap_open + (j-1) * gap_extend
+#         for i in range(1, lx+1):
+#             score = match if x[i-1] == y[j-1] else mismatch
+#             e[i] = max(e[i]+gap_extend, h[i]+gap_open)
+#             f = max(f+gap_extend, h[i-1]+gap_open)
+#             h_prev, h[i] = h[i], max(e[i], f, h_prev + score)
+#     return h
 
 def lastcol(x, y, match, mismatch, gap_open, gap_extend, reverse=False):
     if reverse:
@@ -138,11 +149,15 @@ def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
 
     f, fe = lastcol(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
     s, se = lastcol(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
+    # f, fe = do_parasail(x, y[:ly//2], match, mismatch, gap_open, gap_extend)
+    # s, se = do_parasail(x, y[ly//2:], match, mismatch, gap_open, gap_extend, reverse=True)
 
     j =  f + s[::-1]
     k =  fe + se[::-1] - gap_open
     # mid, mid2 = len(j) - j[::-1].argmax() - 1, len(k) - k[::-1].argmax() - 1
     mid, mid2 = j.argmax(), k.argmax()
+    print(j[mid], f[mid], s[::-1][mid])
+    # print(j[mid])
 
     if j[mid] >= k[mid2]:
         split1 = hirschberg_inner(x[:mid], y[:ly//2], match, mismatch, gap_open, gap_extend)
@@ -201,13 +216,13 @@ def tracecheck(x, y, trace, H, E, F, match, mismatch, gap_open, gap_extend, star
 
 def pyhirschberg(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1, end=False):
     start, last = 0, len(x)
-    if not end:
-        last = slastcol(x, y, match, mismatch, gap_open, gap_extend).argmax()
-        start = last - slastcol(x[:last], y, match, mismatch, gap_open, gap_extend, reverse=True).argmax()
+    # if not end:
+    #     last = slastcol(x, y, match, mismatch, gap_open, gap_extend).argmax()
+    #     start = last - slastcol(x[:last], y, match, mismatch, gap_open, gap_extend, reverse=True).argmax()
     trace = np.array([[start], [0]]) + hirschberg_inner(x[start:last], y, match, mismatch, gap_open, gap_extend)
-    if not end:
-        h, e, f = semiglobal(x, y, match, mismatch, gap_open, gap_extend, end=end)
-        if (k := tracecheck(x, y, trace, h, e, f, match, mismatch, gap_open, gap_extend)) != True:
-            print(trace)
-            raise Exception(f"Bad trace {k}")
-    return trace
+    # if not end:
+    #     h, e, f = semiglobal(x, y, match, mismatch, gap_open, gap_extend, end=end)
+    #     if (k := tracecheck(x, y, trace, h, e, f, match, mismatch, gap_open, gap_extend)) != True:
+    #         print(trace)
+    #         raise Exception(f"Bad trace {k}")
+    # return trace

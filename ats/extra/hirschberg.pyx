@@ -95,7 +95,8 @@ def traceback(x, y, H, E, F, cx, cy, match, mismatch, gap_open, gap_extend, star
                 cur = 1
             elif H[cx, cy] == F[cx, cy]:
                 cur = 2
-            elif (H[cx-1, cy-1] + score) == H[cx, cy]:
+            else:
+            # elif (H[cx-1, cy-1] + score) == H[cx, cy]:
                 traceback.append((cx, cy))
                 cx, cy = cx-1, cy-1
         elif cur == 1:
@@ -162,6 +163,7 @@ def nw_full(x, y, match=1, mismatch=-1, gap_open=-1, gap_extend=-1):
 
 def hirschberg_inner(x, y, match, mismatch, gap_open, gap_extend):
     lx, ly = len(x), len(y)
+    # return nw_full(x, y, match, mismatch, gap_open, gap_extend)
     if lx < 2 or ly < 2:
         return nw_full(x, y, match, mismatch, gap_open, gap_extend)
 

@@ -1,94 +1,31 @@
-import os
-import argparse
-import subprocess
-import tempfile
-from natsort import natsorted
-from pprint import pprint
-from types import MethodType
+import align
+import calign
 from lang import get_lang
-from wcwidth import wcswidth
 
+from audio import AudioFile, TranscribedAudioStream, TranscribedAudioFile
+from text import TextFile, SubFile, SubLine
+
+import time
+import multiprocessing
+from wcwidth import wcswidth
 # Has some edge cases, for example: https://github.com/jquast/wcwidth/commit/8ed7f2c880508a44e4114ea6ac07e8a6b6c76f7f
 # from unicodedata import east_asian_width as ewidth
 # def wcswidth(s):
 #     ww = {'Na': 1, 'W': 2, 'F': 2, 'H': 1, 'A': 2, 'N': 1}
 #     return sum(ww[ewidth(c)] for c in s)
 
-def is_notebook() -> bool:
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell' or shell == 'google.colab._shell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return True   # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-
-if is_notebook():
-    from tqdm.notebook import tqdm, trange
-else:
-    from tqdm import tqdm, trange
-
-from functools import partialmethod, reduce
-from itertools import groupby, takewhile, chain
-from dataclasses import dataclass
 from pathlib import Path
+from itertools import chain
+from dataclasses import dataclass
+from tqdm.autonotebook import tqdm
+from functools import partialmethod
 
-import multiprocessing
-import concurrent.futures as futures
-
-import torch
-import numpy as np
-import whisper
-
-import align
-from huggingface import modify_model
-from quantization import ptdq_linear
-from faster_whisper import WhisperModel
-
-from rapidfuzz import fuzz
-
-from os.path import basename, splitext
-import time
-
-from audio import AudioFile, TranscribedAudioStream, TranscribedAudioFile
-from text import TextFile, SubFile
-
-
-def sexagesimal(secs, use_comma=False):
-    mm, ss = divmod(secs, 60)
-    hh, mm = divmod(mm, 60)
-    r = f'{hh:0>2.0f}:{mm:0>2.0f}:{ss:0>6.3f}'
-    if use_comma:
-        r = r.replace('.', ',')
-    return r
-
-@dataclass(eq=True)
-class Segment:
-    text: str
-    # words: Segment
-    start: float
-    end: float
-    def __repr__(self):
-        return f"Segment(text='{self.text}', start={sexagesimal(self.start)}, end={sexagesimal(self.end)})"
-    def vtt(self, use_comma=False):
-        return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.text}"
-
-def write_srt(segments, o):
-    o.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
-
-def write_vtt(segments, o):
-    o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
-
+# this feels bad, idk
 @dataclass(eq=True)
 class Cache:
     model_name: str
     cache_dir: str
     enabled: bool
-    ask: bool
-    overwrite: bool
 
     def get_name(self, filename, chid):
         return filename + '.' + str(chid) +  '.' + self.model_name + ".subs"
@@ -96,14 +33,7 @@ class Cache:
     def get(self, filename, chid): # TODO Fix this crap
         if not self.enabled: return
         fn = self.get_name(filename, chid)
-        fn2 = filename + '.' + str(chid) +  '.' + 'small' + ".subs"
-        fn3 = filename + '.' + str(chid) +  '.' + 'base' + ".subs"
-        if not self.enabled: return
         if (q := Path(self.cache_dir) / fn).exists():
-            return eval(q.read_bytes().decode("utf-8"))
-        if (q := Path(self.cache_dir) / fn2).exists():
-            return eval(q.read_bytes().decode("utf-8"))
-        if (q := Path(self.cache_dir) / fn3).exists():
             return eval(q.read_bytes().decode("utf-8"))
 
     def put(self, filename, chid, content):
@@ -133,7 +63,7 @@ class Cache:
         p.write_bytes(repr(content).encode('utf-8'))
         return content
 
-def match_start(audio, text, prepend, append, nopend):
+def match_start(aligner, audio, text, prepend, append, nopend):
     ats, sta = {}, {}
     textcache = {}
     for ai, afile in enumerate(tqdm(audio)):
@@ -154,7 +84,7 @@ def match_start(audio, text, prepend, append, nopend):
                     if len(acontent) < 100 or len(tcontent) < 100: continue
 
                     limit = min(len(tcontent), len(acontent), 2000)
-                    score = fuzz.ratio(acontent[:limit], tcontent[:limit])
+                    score = aligner.similarity(acontent[:limit], tcontent[:limit]) / (len(acontent[:limit]) + len(tcontent[:limit])) * 100 + 50
                     if score > 40 and score > best[-1]:
                         best = (ti, j, score)
 
@@ -166,64 +96,61 @@ def match_start(audio, text, prepend, append, nopend):
 
     return ats, sta
 
-# I hate it
 def expand_matches(audio, text, ats, sta):
-    audio_batches = []
+    batches = []
     for ai, a in enumerate(audio):
         batch = []
-        def add(idx, other=[]):
-            chi, chj, _ = ats[ai, idx]
-            z = [chj] + list(takewhile(lambda j: (chi, j) not in sta, range(chj+1, len(text[chi].chapters))))
-            batch.append(([idx]+other, (chi, z), ats[ai, idx][-1]))
 
-        prev = None
-        for t, it in groupby(range(len(a.chapters)), key=lambda aj: (ai, aj) in ats):
-            k = list(it)
-            if t:
-                for i in k[:-1]: add(i)
-                prev = k[-1]
-            elif prev is not None:
-                add(prev, k)
-            else:
-                batch.append((k, (-1, []), None))
+        i = 0
+        while i < len(a.chapters):
+            astart = i
+            aend = i+1
+            if (ai, astart) not in ats:
+                i = aend
+                continue
+            while aend < len(a.chapters) and (ai, aend) not in ats:
+                aend += 1
 
-        if prev == len(a.chapters)-1:
-            add(prev)
-        audio_batches.append(batch)
-    return audio_batches
+            book, tstart, score = ats[ai, astart]
+            tend = tstart+1
+            while tend < len(text[book].chapters) and (book, tend) not in sta:
+                tend += 1
+            batch.append((astart, aend, book, tstart, tend, score))
+            i = aend
+        batches.append(batch)
+    return batches
 
-# Takes in the original not the transcribed classes
-def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-'):
+
+def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-', sep3='::'):
     rows = [1, ["Audio", "Text", "Score"]]
     width = [wcswidth(h) for h in rows[-1]]
 
     for ai, batch in enumerate(batches):
         use_audio_header = len(audio[ai].chapters) > 1
 
-        texts = [chi for _, (chi, _), _ in batch if chi != -1]
-        text_unique = all([i == texts[0] for i in texts])
-        use_text_header = text_unique and len(batch[0][1][1]) > 3
+        text_unique = len(set(b[-4] for b in batch)) == 1
+        use_text_header = text_unique and (batch[0][-2] - batch[0][-3]) > 3
 
         if use_audio_header or use_text_header:
             rows.append(1)
             rows.append([audio[ai].title, '', ''])
             use_audio_header = True
             if text_unique:
-                rows[-1][1] = text[batch[0][1][0]].title
+                rows[-1][1] = text[batch[0][-4]].title
                 use_text_header = True
             width[0] = max(width[0], wcswidth(rows[-1][0]))
             width[1] = max(width[1], wcswidth(rows[-1][1]))
         rows.append(1)
-        for ajs, (chi, chjs), score in batch:
-            a = [audio[ai].chapters[aj] for aj in ajs]
-            t = [text[chi].chapters[chj] for chj in chjs]
+        for astart, aend, book, tstart, tend, score in batch:
+            a = [audio[ai].chapters[i] for i in range(astart, aend)]
+            t = [text[book].chapters[i] for i in range(tstart, tend)]
             for i in range(max(len(a), len(t))):
                 row = ['', '' if t else '?', '']
                 if i < len(a):
-                    row[0] = (audio[ai].title + "::" if not use_audio_header else '') + a[i].title.strip()
+                    row[0] = (audio[ai].title + sep3 if not use_audio_header else '') + a[i].title.strip()
                     width[0] = max(width[0], wcswidth(row[0]))
                 if i < len(t):
-                    row[1] = (text[chi].title + "::" if not use_text_header else '') + t[i].title.strip()
+                    row[1] = (text[book].title + sep3 if not use_text_header else '') + t[i].title.strip()
                     width[1] = max(width[1], wcswidth(row[1]))
                 if i == 0:
                     row[2] = format(score/100, '.2%') if score is not None else '?'
@@ -235,7 +162,7 @@ def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-'):
 
     for row in rows:
         csep = ' ' * spacing
-        if type(row) is int:
+        if isinstance(row, int):
             sep = sep1 if row == 1 else sep2
             print(csep.join([sep*w for w in width]))
             continue
@@ -245,30 +172,21 @@ def to_epub():
     pass
 
 def to_subs(text, subs, alignment, offset, references):
-    pprint(alignment)
-    alignment = [t + [i] for i, a in enumerate(alignment) for t in a]
-    pprint(alignment)
-    start, end = 0, 0
     segments = []
-    for si, s in enumerate(subs):
-        while end < len(alignment) and alignment[end][-2] == si:
-            end += 1
-
-        r = ''
-        for a in alignment[start:end]:
-            r += text[a[-1]].text()[a[0]:a[1]]
-
-        if r.strip():
-            if False: # Debug
-                r = s['text']+'\n'+r
-            segments.append(Segment(text=r, start=s['start']+offset, end=s['end']+offset))
-        else:
-            segments.append(Segment(text='＊'+s['text'], start=s['start']+offset, end=s['end']+offset))
-
-        start = end
+    for ai, a in enumerate(alignment):
+        if a[0] == -1:
+            continue
+        ts, te = a[0], a[1]
+        tso, teo = a[2], a[3]
+        line = ''.join([text[i].text() for i in range(ts, te)])
+        line =  line[tso:-len(text[te-1].text())+teo]
+        s = subs[ai]
+        if True and line.strip(): # Debug
+            line = s['text']+'\n'+line
+        segments.append(SubLine(idx=ai, content=line if line.strip() else '＊'+s['text'], start=s['start']+offset, end=s['end']+offset))
     return segments
 
-def do_batch(ach, tch, prepend, append, nopend, offset):
+def do_batch(aligner, ach, tch, prepend, append, nopend, offset):
     acontent = []
     boff = 0
     for a in ach:
@@ -281,22 +199,14 @@ def do_batch(ach, tch, prepend, append, nopend, offset):
     language = get_lang(ach[0][0].language, prepend, append, nopend)
 
     tcontent = [p for t in tch for p in t.text()]
-    alignment, references = align.align(None, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
+    alignment, references = align.align(None, aligner, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
     return to_subs(tcontent, acontent, alignment, offset, None)
 
-def faster_transcribe(self, audio, **args):
-    name = args.pop('name')
-
-    args['log_prob_threshold'] = args.pop('logprob_threshold')
-    args['beam_size'] = args['beam_size'] if args['beam_size'] else 1
-    args['patience'] = args['patience'] if args['patience'] else 1
-    args['length_penalty'] = args['length_penalty'] if args['length_penalty'] else 1
-
-    gen, info = self.transcribe2(audio, best_of=1, **args)
-
+def faster_transcribe(model, audiofile, idx, **args):
+    gen, info = model.transcribe(audiofile.chapters[idx].audio(), best_of=1, **args)
     segments, prev_end = [], 0
     with tqdm(total=info.duration, unit_scale=True, unit=" seconds") as pbar:
-        pbar.set_description(f'{name}')
+        pbar.set_description(audiofile.chapters[idx].title)
         for segment in gen:
             segments.append(segment._asdict())
             pbar.update(segment.end - prev_end)
@@ -307,32 +217,42 @@ def faster_transcribe(self, audio, **args):
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
-def parse_indices(s, l):
-    ss, r = s.split(), set()
-    for a in ss:
-        try:
-            if a[0] == '^':
-                val = int(a[1:])
-                r = r.union(range(l)) - {val}
-            elif len(k := a.split('-')) > 1:
-                val1 = min(int(k[0]), l-1)
-                val2 = min(int(k[1]), l-1)
-                r = r.union(range(val1, val2+1))
-            else:
-                if (val1 := int(a)) < l:
-                    r.add(val1)
-        except ValueError:
-            return
-    return r
+def prompt(l):
+    if l == 0:
+        return []
+    while True:
+        inp = input('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ') # Taken from yay
+        r = set()
+        for a in inp.split():
+            try:
+                if a[0] == '^':
+                    val = int(a[1:])
+                    r = r.union(range(l)) - {val}
+                elif len(k := a.split('-')) > 1:
+                    val1 = min(int(k[0]), l-1)
+                    val2 = min(int(k[1]), l-1)
+                    r = r.union(range(val1, val2+1))
+                else:
+                    if (val1 := int(a)) < l:
+                        r.add(val1)
+            except ValueError:
+                print("Parsing failed")
+                continue
+        return r
 
 
-def alass(output_dir, alass_path, alass_args, alass_sort, args):
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=True) for f in args.pop('audio')))
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
-    audio = natsorted(audio, lambda x: x.path.name) if alass_sort else audio
-    text = natsorted(text, lambda x: x.path.name) if alass_sort else text
+def alass(audio, text, language, output_dir, output_format, overwrite,
+          path, args, sort):
+    import tempfile
+    import subprocess
+    import torch
+    from natsort import natsorted
+
+    audio = natsorted(audio, lambda x: x.path.name) if sort else audio
+    text = natsorted(text, lambda x: x.path.name) if sort else text
+
     if not all(isinstance(t, SubFile) for t in text):
-        print('--alass inputs should be subtitle files')
+        print('alass inputs should be subtitle files not epubs or text files')
         return
     if len(audio) != len(text):
         print("len(audio) != len(text), input needs to be in order for alass alignment")
@@ -348,190 +268,46 @@ def alass(output_dir, alass_path, alass_args, alass_sort, args):
             bar.set_description(f'Aligning {t.title} with {a.title}')
             segments = [Segment(text='h', start=s['start'], end=s['end']) for s in v]
             with tempfile.NamedTemporaryFile(mode="w", suffix='.srt') as f:
-                write_srt(segments, f)
-                cmd = [alass_path, *['-'+h for h in alass_args], f.name, str(t.path), str(output_dir / (a.path.stem + ''.join(t.path.suffixes)))]
-                tqdm.write(' '.join(cmd))
+                f.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
+                cmd = [path, *['-'+h for h in args], f.name, str(t.path), str(output_dir / (a.path.stem + ''.join(t.path.suffixes)))]
+                bar.write(' '.join(cmd))
                 try:
                     subprocess.run(cmd)
                 except subprocess.CalledProcessError as e:
                     raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
 
-def main():
-    parser = argparse.ArgumentParser(description="Match audio to a transcript")
-    parser.add_argument("--audio", nargs="+", type=Path, required=True, help="list of audio files to process (in the correct order)")
-    parser.add_argument("--text", nargs="+", type=Path, required=True, help="path to the script file")
 
-    parser.add_argument("--model", default="tiny", help="whisper model to use. can be one of tiny, small, large, huge")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="device to do inference on")
-    parser.add_argument("--threads", type=int, default=multiprocessing.cpu_count(), help=r"number of threads")
-    parser.add_argument("--language", default=None, help="language of the script and audio")
-    parser.add_argument("--whole", default=False, help="Do the alignment on whole files, don't split into chapters", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--local-only", default=False, help="Don't download outside models", action=argparse.BooleanOptionalAction)
-
-    parser.add_argument("--alass", default=False, help="Use vad+alass to realign, inputs need to be in-order, this is temporary until I figure out something better (implies --whole)", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--alass-path", default='alass', help="path to alass")
-    parser.add_argument("--alass-args", default=['O0'], nargs="+", help="additional arguments to alass (pass without the dash, eg: O1)")
-    parser.add_argument("--alass-sort", default=True, help="Sort the files (natural sort) before grouping", action=argparse.BooleanOptionalAction)
-
-    parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--overwrite", default=False,  help="Overwrite any destination files", action=argparse.BooleanOptionalAction)
-
-    parser.add_argument("--use-cache", default=True, help="whether to use the cache or not", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--cache-dir", default="AudiobookTextSyncCache", help="the cache directory")
-    parser.add_argument("--overwrite-cache", default=False, action=argparse.BooleanOptionalAction, help="Always overwrite the cache")
-
-    parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--dynamic-quantization", "--dq", default=False, help="Use torch's dynamic quantization (cpu only)", action=argparse.BooleanOptionalAction)
-
-    parser.add_argument("--faster-whisper", default=True, help='Use faster_whisper, doesn\'t work with hugging face\'s decoding method currently', action=argparse.BooleanOptionalAction)
-    parser.add_argument("--fast-decoder", default=False, help="Use hugging face's decoding method, currently incomplete", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--fast-decoder-overlap", type=int, default=10,help="Overlap between each batch")
-    parser.add_argument("--fast-decoder-batches", type=int, default=1, help="Number of batches to operate on")
-
-    parser.add_argument("--beam_size", type=int, default=None, help="number of beams in beam search, only applicable when temperature is zero")
-    parser.add_argument("--patience", type=float, default=None, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
-    parser.add_argument("--length_penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
-
-    parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
-    parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
-    parser.add_argument("--condition_on_previous_text", default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop", action=argparse.BooleanOptionalAction)
-
-    parser.add_argument("--temperature", type=float, default=0, help="temperature to use for sampling")
-    parser.add_argument("--temperature_increment_on_fallback", type=float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
-    parser.add_argument("--compression_ratio_threshold", type=float, default=2.4, help="if the gzip compression ratio is higher than this value, treat the decoding as failed")
-    parser.add_argument("--logprob_threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
-    parser.add_argument("--no_speech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `logprob_threshold`, consider the segment as silence")
-
-    parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
-    parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
-    parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
-
-    parser.add_argument("--word_timestamps", default=False, help="(experimental) extract word-level timestamps and refine the results based on them", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--highlight_words", default=False, help="(requires --word_timestamps True) underline each word as it is spoken in srt and vtt", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--max_line_width", type=int, default=None, help="(requires --word_timestamps True) the maximum number of characters in a line before breaking the line")
-    parser.add_argument("--max_line_count", type=int, default=None, help="(requires --word_timestamps True) the maximum number of lines in a segment")
-    parser.add_argument("--max_words_per_line", type=int, default=None, help="(requires --word_timestamps True, no effect with --max_line_width) the maximum number of words in a segment")
-
-    parser.add_argument("--output-dir", default=u'.', type=Path, help="Output directory, default uses the directory for the first audio file")
-    parser.add_argument("--output-format", default='srt', help="Output format, currently only supports vtt and srt")
-
-    args = parser.parse_args().__dict__
-    tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.pop('progress'))
-    if (threads := args.pop("threads")) > 0: torch.set_num_threads(threads)
-
-    output_dir = args.pop('output_dir')
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_format = args.pop('output_format')
-
-    alass_path, alass_args, alass_sort = args.pop('alass_path'), args.pop('alass_args'), args.pop('alass_sort')
-    if args.pop('alass'):
-        alass(output_dir, alass_path, alass_args, alass_sort, args)
-        return
-
-    model, device = args.pop("model"), args.pop('device')
-    if device == 'cuda' and not torch.cuda.is_available():
-        device = 'cpu'
-    print(f"Using device: {device}")
-
-    file_overwrite, overwrite_cache = args.pop('overwrite'), args.pop('overwrite_cache')
-    cache = Cache(model_name=model, enabled=args.pop("use_cache"), cache_dir=args.pop("cache_dir"),
-                  ask=not overwrite_cache, overwrite=overwrite_cache)
-
-    faster_whisper, local_only, quantize = args.pop('faster_whisper'), args.pop('local_only'), args.pop('quantize')
-    fast_decoder, overlap, batches = args.pop('fast_decoder'), args.pop("fast_decoder_overlap"), args.pop("fast_decoder_batches")
-    dq = args.pop('dynamic_quantization')
-    if faster_whisper:
-        model = WhisperModel(model, device, local_files_only=local_only, compute_type='float32' if not quantize else ('int8' if device == 'cpu' else 'float16'), num_workers=threads)
-        model.transcribe2 = model.transcribe
-        model.transcribe = MethodType(faster_transcribe, model)
-    else:
-        model = whisper.load_model(model, device)
-        args['fp16'] = quantize and device != 'cpu'
-        if args['fp16']:
-            model = model.half()
-        elif dq:
-            ptdq_linear(model)
-
-        if fast_decoder:
-            args["overlap"] = overlap
-            args["batches"] = batches
-            modify_model(model)
-
-    temperature = args.pop("temperature")
-    if (increment := args.pop("temperature_increment_on_fallback")) is not None:
-        temperature = tuple(np.arange(temperature, 1.0 + 1e-6, increment))
-    else:
-        temperature = [temperature]
-
-    word_options = [
-        "highlight_words",
-        "max_line_count",
-        "max_line_width",
-        "max_words_per_line",
-    ]
-    if not args["word_timestamps"]:
-        for option in word_options:
-            if args[option]:
-                parser.error(f"--{option} requires --word_timestamps True")
-
-    if args["max_line_count"] and not args["max_line_width"]:
-        warnings.warn("--max_line_count has no effect without --max_line_width")
-    if args["max_words_per_line"] and args["max_line_width"]:
-        warnings.warn("--max_words_per_line has no effect with --max_line_width")
-    writer_args = {arg: args.pop(arg) for arg in word_options}
-    word_timestamps = args.pop("word_timestamps")
-
-    prepend, append, nopend = [args.pop(i+'_punctuations') for i in ['prepend', 'append', 'nopend']]
-    whole = args.pop('whole')
-
-    print("Loading...")
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=args['language'], whole=whole) for f in args.pop('audio')))
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
-    print(text[0].chapters[2])
+def whisper(audio, text, language, output_dir, output_format, file_overwrite,
+            model, device, threads, local_only, memsize, quantize,
+            use_cache, cache_dir, overwrite_cache,
+            prepend_punctuations, append_punctuations, nopend_punctuations,
+            **model_args):
+    from faster_whisper import WhisperModel
+    cache = Cache(model_name=model, enabled=use_cache, cache_dir=cache_dir)
+    model = WhisperModel(model, device, local_files_only=local_only, cpu_threads=threads,
+                         compute_type={'cpu': 'int8', 'cuda': 'float16'} if quantize else 'float32')
 
     print('Transcribing...')
+    in_cache = [(i, j) for i, a in enumerate(audio) for j, c in enumerate(a.chapters) if cache.get(a.path.name, c.id)] if not overwrite_cache else set()
+    for i, v in enumerate(in_cache):
+        name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
+        print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
+    in_cache = set(in_cache) - {in_cache[i] for i in prompt(len(in_cache))}
+
     s = time.monotonic()
     transcribed_audio = []
-
-    # Trash code
-    # TODO: This really doesn't have much of a perf improvement
-    # Get rid of it and update faster-whisper to support batching
-    with futures.ThreadPoolExecutor(max_workers=threads) as p:
-        in_cache = []
-        for i, a in enumerate(audio):
-            for j, c in enumerate(a.chapters):
-                if cache.get(a.path.name, c.id): # Cache the result here and not in the class?
-                    in_cache.append((i, j))
-
-        if cache.ask and len(in_cache):
-            for i, v in enumerate(in_cache):
-                name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
-                print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
-            indices = None
-            while indices is None:
-                inp = input('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ') # Taken from yay
-                if (indices := parse_indices(inp, len(in_cache))) is None:
-                    print("Parsing failed")
-            overwrite = {in_cache[i] for i in indices}
-        else:
-            overwrite = set(in_cache) if overwrite_cache else set()
-
-        fs = []
-        for i, a in enumerate(audio):
-            cf = []
-            for j, c in enumerate(a.chapters):
-                if (i, j) not in overwrite and (t := cache.get(a.path.name, c.id)):
-                    l = lambda c=c, t=t: TranscribedAudioStream.from_map(c, t)
-                else:
-                    l = lambda c=c: TranscribedAudioStream.from_map(c, cache.put(a.path.name, c.id, model.transcribe(c.audio(), name=c.title, temperature=temperature, **args)))
-                cf.append(p.submit(l))
-            fs.append(cf)
-
-        transcribed_audio =  [TranscribedAudioFile(file=audio[i], chapters=[r.result() for r in f]) for i, f in enumerate(fs)]
+    for i, a in enumerate(audio):
+        cf = []
+        for j, c in enumerate(a.chapters):
+            t = cache.get(a.path.name, c.id) if (i, j) in in_cache else cache.put(a.path.name, c.id, faster_transcribe(model, a, j, **model_args))
+            cf.append(TranscribedAudioStream.from_map(c, t))
+        transcribed_audio.append(TranscribedAudioFile(file=a, chapters=cf))
     print(f"Transcribing took: {time.monotonic()-s:.2f}s")
 
+    aligner = calign.Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
+
     print('Fuzzy matching chapters...')
-    ats, sta = match_start(transcribed_audio, text, prepend, append, nopend)
+    ats, sta = match_start(aligner, transcribed_audio, text, prepend_punctuations, append_punctuations, nopend_punctuations)
     audio_batches = expand_matches(transcribed_audio, text, ats, sta)
     print_batches(audio_batches, audio, text)
 
@@ -544,23 +320,89 @@ def main():
                 continue
 
             bar.set_description(audio[ai].path.name)
-            offset, segments = 0, []
-            for ajs, (chi, chjs), _ in tqdm(batches):
-                ach = [(transcribed_audio[ai].chapters[aj], audio[ai].chapters[aj].duration) for aj in ajs]
-                tch = [text[chi].chapters[chj] for chj in chjs]
-                if tch:
-                    segments.extend(do_batch(ach, tch, prepend, append, nopend, offset))
-
+            offset, segments = sum(audio[ai].chapters[i].duration for i in range(0, batches[0][0])), []
+            for astart, aend, book, tstart, tend, _ in tqdm(batches):
+                ach = [(transcribed_audio[ai].chapters[i], audio[ai].chapters[i].duration) for i in range(astart, aend)]
+                tch = [text[book].chapters[i] for i in range(tstart, tend)]
+                segments.extend(do_batch(aligner, ach, tch, prepend_punctuations, append_punctuations, nopend_punctuations, offset))
                 offset += sum(a[1] for a in ach)
 
             if not segments:
                 continue
 
             with out.open("w", encoding='utf8') as o:
-                if output_format == 'srt':
-                    write_srt(segments, o)
+                if output_format == "srt":
+                    o.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
                 elif output_format == 'vtt':
-                    write_vtt(segments, o)
+                    o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
+
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Match audio to a transcript")
+    parser.add_argument("--text", type=Path, required=True, default=[], action='append', help="path to the script file")
+
+    parser.add_argument("--audio", type=Path, required=True, default=[], action='append', help="list of audio files to process (in the correct order)")
+    parser.add_argument("--language", default=None, help="language of the script and audio")
+
+    parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--overwrite", default=False,  help="overwrite any destination files", action=argparse.BooleanOptionalAction)
+
+    parser.add_argument("--output-dir", default=u'.', type=Path, help="output directory")
+    parser.add_argument("--output-format", default='srt', help="output format currently only supports vtt and srt")
+
+    subparsers = parser.add_subparsers(title='Modes')
+
+    alass_parser = subparsers.add_parser('alass', help='Use vad+alass to realign')
+    alass_parser.set_defaults(mode=alass)
+    alass_parser.add_argument("--path", default='alass', help="path to alass")
+    alass_parser.add_argument("--args", default=['O0'], nargs="+", help="additional arguments to alass (pass without the dash, eg: O1)")
+    alass_parser.add_argument("--sort", default=True, help="sort the files (natural sort) before grouping", action=argparse.BooleanOptionalAction)
+
+    whisper_parser = subparsers.add_parser('whisper', help='use whisper to align')
+    whisper_parser.set_defaults(mode=whisper)
+
+    whisper_parser.add_argument("--model", default="tiny", help="whisper model to use. can be one of tiny, small, large, huge")
+    whisper_parser.add_argument("--device", default='auto', help="device to do inference on")
+    whisper_parser.add_argument("--threads", type=int, default=multiprocessing.cpu_count(), help="number of threads")
+    whisper_parser.add_argument("--local-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--memsize", type=int, default=int(1*1024**2), help="amount of memory to use for alignment in bytes")
+
+    whisper_parser.add_argument("--use-cache", default=True, help="use the transcription cache", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--overwrite-cache", default=False, help="always overwrite the cache", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--cache-dir", default="AudiobookTextSyncCache", help="Cache directory")
+
+    whisper_parser.add_argument("--word_timestamps", default=False, help="extract word-level timestamps and refine the results based on them", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--beam_size", type=int, default=1, help="number of beams in beam search, only applicable when temperature is zero")
+    whisper_parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
+    whisper_parser.add_argument("--length_penalty", type=float, default=1, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
+
+    whisper_parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
+    whisper_parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
+    whisper_parser.add_argument("--condition_on_previous_text", default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop", action=argparse.BooleanOptionalAction)
+
+    whisper_parser.add_argument("--temperature", type=float, default=0, help="temperature to use for sampling")
+    # whisper_parser.add_argument("--temperature_increment_on_fallback", type=float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
+    whisper_parser.add_argument("--compression_ratio_threshold", type=float, default=2.4, help="if the gzip compression ratio is higher than this value, treat the decoding as failed")
+    whisper_parser.add_argument("--log_prob_threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
+    whisper_parser.add_argument("--no_speech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
+
+    whisper_parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
+    whisper_parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
+    whisper_parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
+
+    args = parser.parse_args().__dict__
+    tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.pop('progress'))
+
+    language = args.pop('language')
+
+    print("Loading...")
+    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=language) for f in args.pop('audio')))
+    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+
+    output_dir = args.pop('output_dir')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_format = args.pop('output_format')
+
+    args.pop('mode')(audio, text, language, output_dir, output_format, args.pop('overwrite'), **args)

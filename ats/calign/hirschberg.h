@@ -17,11 +17,14 @@
 #define max(a, b) ((b) > (a) ? (b) : (a))
 #define min(a, b) ((a) > (b) ? (b) : (a))
 
-__attribute__ ((always_inline))
-static inline size_t align(size_t n, size_t alignment) {
-  size_t a = alignment - 1;
-  return (n+a) & ~a;
-}
+#include <assert.h>
+
+/* __attribute__ ((always_inline)) */
+/* static inline size_t align(int64_t n, int64_t alignment) { */
+/*   assert(alignment > 0); */
+/*   size_t a = alignment - 1; */
+/*   return (n+a) & ~a; */
+/* } */
 
 // https://www.dii.uchile.cl/~daespino/files/Iso_C_1999_definition.pdf 6.7.3.1
 // https://davmac.wordpress.com/2013/08/07/what-restrict-really-means/
@@ -65,5 +68,18 @@ typedef struct Buffers {
     };
   };
 } Buffers;
+
+typedef struct Tuple {
+    union {
+      struct {
+        __m256i *restrict vH;
+        __m256i *restrict vE;
+      };
+      struct {
+        int32_t *restrict H;
+        int32_t *restrict E;
+      };
+    };
+} Tuple;
 
 #endif
