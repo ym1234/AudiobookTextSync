@@ -1,26 +1,24 @@
 import align
 import calign
+
+import time
+import multiprocessing
+
 from lang import get_lang
 
 from audio import AudioFile, TranscribedAudioStream, TranscribedAudioFile
 from text import TextFile, SubFile, SubLine
 
-import time
-import multiprocessing
-from wcwidth import wcswidth
-# Has some edge cases, for example: https://github.com/jquast/wcwidth/commit/8ed7f2c880508a44e4114ea6ac07e8a6b6c76f7f
-# from unicodedata import east_asian_width as ewidth
-# def wcswidth(s):
-#     ww = {'Na': 1, 'W': 2, 'F': 2, 'H': 1, 'A': 2, 'N': 1}
-#     return sum(ww[ewidth(c)] for c in s)
-
 from pathlib import Path
 from itertools import chain
+from wcwidth import wcswidth
 from dataclasses import dataclass
-from tqdm.autonotebook import tqdm
+from tqdm.auto import tqdm
 from functools import partialmethod
+from pprint import pprint
 
 # this feels bad, idk
+# sqlite?
 @dataclass(eq=True)
 class Cache:
     model_name: str
@@ -71,7 +69,12 @@ def match_start(aligner, audio, text, prepend, append, nopend):
             if (ai, i) in ats: continue
 
             lang = get_lang(ach.language, prepend, append, nopend)
-            acontent = lang.normalize(lang.clean(''.join(seg['text'] for seg in ach.segments)))
+            # acontent = lang.normalize(lang.clean(''.join(seg['text'] for seg in ach.segments)))
+            l, end = 0, 0
+            while end < len(ach.segments) and l < 2000:
+                l += len(ach.segments[end]['text'])
+                end += 1
+            acontent = ''.join(seg['text'] for seg in ach.segments[:end])
 
             best = (-1, -1, 0)
             for ti, tfile in enumerate(text):
@@ -79,11 +82,17 @@ def match_start(aligner, audio, text, prepend, append, nopend):
                     if (ti, j) in sta: continue
 
                     if (ti, j) not in textcache:
-                        textcache[ti, j] = lang.normalize(lang.clean(''.join(p.text() for p in tfile.chapters[j].text())))
+                        li = tfile.chapters[j].text()
+                        l, end = 0, 0
+                        while end < len(li) and l < 2000:
+                            l += len(li[end].text())
+                            end += 1
+                        textcache[ti, j] = ''.join(p.text() for p in li[:end])
+                        # textcache[ti, j] = lang.normalize(lang.clean(''.join(p.text() for p in tfile.chapters[j].text())))
                     tcontent = textcache[ti, j]
                     if len(acontent) < 100 or len(tcontent) < 100: continue
 
-                    limit = min(len(tcontent), len(acontent), 2000)
+                    limit = min(len(tcontent), len(acontent))
                     score = aligner.similarity(acontent[:limit], tcontent[:limit]) / (len(acontent[:limit]) + len(tcontent[:limit])) * 100 + 50
                     if score > 40 and score > best[-1]:
                         best = (ti, j, score)
@@ -181,7 +190,7 @@ def to_subs(text, subs, alignment, offset, references):
         line = ''.join([text[i].text() for i in range(ts, te)])
         line =  line[tso:-len(text[te-1].text())+teo]
         s = subs[ai]
-        if True and line.strip(): # Debug
+        if False and line.strip(): # Debug
             line = s['text']+'\n'+line
         segments.append(SubLine(idx=ai, content=line if line.strip() else '＊'+s['text'], start=s['start']+offset, end=s['end']+offset))
     return segments
@@ -217,11 +226,11 @@ def faster_transcribe(model, audiofile, idx, **args):
     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
-def prompt(l):
-    if l == 0:
+def prompt(message, lchoices):
+    if lchoices == 0:
         return []
     while True:
-        inp = input('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ') # Taken from yay
+        inp = input(message) # Taken from yay
         r = set()
         for a in inp.split():
             try:
@@ -288,11 +297,12 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
                          compute_type={'cpu': 'int8', 'cuda': 'float16'} if quantize else 'float32')
 
     print('Transcribing...')
+
     in_cache = [(i, j) for i, a in enumerate(audio) for j, c in enumerate(a.chapters) if cache.get(a.path.name, c.id)] if not overwrite_cache else set()
     for i, v in enumerate(in_cache):
         name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
         print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
-    in_cache = set(in_cache) - {in_cache[i] for i in prompt(len(in_cache))}
+    in_cache = set(in_cache) - {in_cache[i] for i in prompt('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ', len(in_cache))}
 
     s = time.monotonic()
     transcribed_audio = []
@@ -366,7 +376,7 @@ if __name__ == "__main__":
     whisper_parser.add_argument("--device", default='auto', help="device to do inference on")
     whisper_parser.add_argument("--threads", type=int, default=multiprocessing.cpu_count(), help="number of threads")
     whisper_parser.add_argument("--local-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--memsize", type=int, default=int(1*1024**2), help="amount of memory to use for alignment in bytes")
+    whisper_parser.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
 
     whisper_parser.add_argument("--use-cache", default=True, help="use the transcription cache", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument("--overwrite-cache", default=False, help="always overwrite the cache", action=argparse.BooleanOptionalAction)
@@ -398,8 +408,10 @@ if __name__ == "__main__":
     language = args.pop('language')
 
     print("Loading...")
-    audio = list(chain.from_iterable(AudioFile.from_dir(f, track=language) for f in args.pop('audio')))
-    text = list(chain.from_iterable(TextFile.from_dir(f) for f in args.pop('text')))
+    audio = list(chain.from_iterable([AudioFile.from_file(f)] if f.is_file() else AudioFile.from_dir(f) for f in args.pop('audio')))
+    text  = list(chain.from_iterable([TextFile.from_file(f)] if f.is_file() else TextFile.from_dir(f) for f in args.pop('text')))
+    pprint(audio)
+    exit(0)
 
     output_dir = args.pop('output_dir')
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -22,7 +22,7 @@ class Japanese(Language):
         arabic = '１２３４５６７８９１００'
         self.kansuu_arabic = {ord(kansuu[i]): arabic[i%len(arabic)] for i in range(len(kansuu))}
 
-        self.punc =  {ord(i): '。' for i in prepend}
+        self.punc = {}# {ord(i): '。' for i in prepend}
         self.confused = {ord('は'): 'わ', ord('あ'): 'わ', ord('お'): 'を', ord('へ'): 'え'}
 
         self.translations = self.kata_hira | self.kansuu_arabic | self.ascii_wide | self.punc | self.confused
