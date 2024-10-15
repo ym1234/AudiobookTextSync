@@ -1,19 +1,28 @@
 import os
-import ffmpeg
+import json
+import time
+import mimetypes
 import numpy as np
+
+from pprint import pprint
+from subprocess import Popen, PIPE, run, CalledProcessError
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Union
-import mimetypes
-import pycountry
 
+SAMPLE_RATE = 16000
+N_FFT = 400
+HOP_LENGTH = 160
+CHUNK_LENGTH = 30
+N_SAMPLES = CHUNK_LENGTH * SAMPLE_RATE  # 480000 samples in a 30-second chunk
+N_FRAMES = N_SAMPLES // HOP_LENGTH  # 3000 frames in a mel spectrogram input
 
 @cache
-def get_mel_filters(sr=16000, n_fft=400, n_mels=128, dtype=np.float32):
+def get_mel_filters(sr=16000, n_fft=400, n_mels=128):
     # Initialize the weights
     n_mels = int(n_mels)
-    weights = np.zeros((n_mels, int(1 + n_fft // 2)), dtype=dtype)
+    weights = np.zeros((n_mels, int(1 + n_fft // 2)), dtype=np.float32)
 
     # Center freqs of each FFT bin
     fftfreqs = np.fft.rfftfreq(n=n_fft, d=1.0 / sr)
@@ -59,6 +68,18 @@ def get_mel_filters(sr=16000, n_fft=400, n_mels=128, dtype=np.float32):
 
     return weights
 
+
+def read_full(pipe, buffer, offset):
+    nread, end = offset, False
+    while nread < len(buffer):
+        bread = pipe.readinto(buffer[nread:])
+        if bread == 0: # I think this is correct?
+            end = True
+            break
+        bread //= 4
+        nread += bread
+    return nread, end
+
 @dataclass(eq=True, frozen=True)
 class Chapter:
     cid: int
@@ -82,24 +103,100 @@ class AudioFile:
 
     streams: list
     chapters: list
+    def mel(self, cid, sid, n_mels=80):
+        filters = get_mel_filters(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
+        window = np.hanning(N_FFT + 1)[:-1].astype(np.float32)
+        num_fft_bins = (N_FFT >> 1) + 1
 
-    def mel(self, cid, sid, sr=16000, n_fft=400, n_mels=128, dtype=np.float32):
-        filters = get_mel_filters(sr=sr, n_fft=n_fft, n_mels=n_mels, dtype=dtype)
-        window = np.hanning(self.n_fft + 1)[:-1]
-        process = (
-                ffmpeg
-                .input(self.path, ss=self.chapters[cid].start, to=self.chapters[cid].end)
-                .output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=sr, map=f'0:{self.streams[sid].idx}').
-                .run_async(pipe_stdout=True, pipe_stderr=True)
-            )
+        mmel = -np.inf # This stupid thing, technically not the same but i doubt it matters
+        def to_mel(arr):
+            nonlocal mmel
+            chunks = np.stack([arr[i:i+N_FFT] for i in range(0, len(arr), HOP_LENGTH)][:-2])
+
+            stft = np.fft.fft(chunks*window).T[:num_fft_bins]
+            magnitudes = np.abs(stft) ** 2 # https://stackoverflow.com/questions/30437947/most-memory-efficient-way-to-compute-abs2-of-complex-numpy-ndarray
+
+            mel_spec = filters @ magnitudes
+            log_spec = np.log10(np.clip(mel_spec, a_min=1e-10, a_max=None))
+
+            nmax = log_spec.max()
+            if nmax > mmel: mmel = nmax
+
+            log_spec = np.maximum(log_spec, mmel - 8.0)
+            return (log_spec + 4) / 4
+
+        cmd = [
+            "ffmpeg",
+            "-nostdin",
+            "-threads", "0",
+            '-ss', str(self.chapters[cid].start),
+            '-to', str(self.chapters[cid].end),
+            "-i",  str(self.path),
+            "-f", "f32le",
+            "-ac", "1",
+            "-acodec", "pcm_f32le",
+            "-ar", str(SAMPLE_RATE),
+            "-map", f"0:{self.streams[sid].idx}",
+            "-"
+        ]
+
+        dt = np.dtype(np.float32).newbyteorder('<')
+        cur = np.zeros(CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=dt)
+        process = Popen(cmd, bufsize=10*cur.nbytes, stdout=PIPE, stderr=PIPE)
+
+        nread, end = read_full(process.stdout, cur, N_FFT//2)
+        cur[:N_FFT//2] = cur[N_FFT//2:N_FFT][::-1] # reflect
+
+        while not end:
+            yield to_mel(cur)
+            cur[:N_FFT - HOP_LENGTH] = cur[-N_FFT+HOP_LENGTH:]
+            nread, end = read_full(process.stdout, cur, N_FFT - HOP_LENGTH)
+
+        leftover = N_FFT - nread % N_FFT
+        cur[nread:nread+leftover] = cur[nread-leftover:nread][::-1]
+        yield to_mel(cur[:nread+leftover])[:, :-1]
+
+
+    def get_wave(self, chapter, sidx):
+        cmd = [
+            "ffmpeg",
+            "-nostdin",
+            "-threads", "0",
+            '-ss', str(self.chapters[chapter].start),
+            '-to', str(self.chapters[chapter].end),
+            "-i",  str(self.path),
+            "-f", "f32le",
+            "-ac", "1",
+            "-acodec", "pcm_f32le",
+            "-ar", str(SAMPLE_RATE),
+            "-map", f"0:{self.streams[sidx].idx}",
+            "-"
+        ]
+
+        dt = np.dtype(np.float32).newbyteorder('<')
+        try:
+            out = run(cmd, capture_output=True, check=True).stdout
+        except CalledProcessError as e:
+            raise RuntimeError(f"Failed to load audio:\n {e.stderr.decode('utf-8')}") from e
+        return np.frombuffer(out, dtype=dt)
 
     @classmethod
     def from_file(cls, path):
-        if not path.exists(): raise FileNotFoundError(f"{str(path)} doesn't exist")
+        cmd = [
+            "ffprobe",
+            "-threads", "0",
+            "-output_format", "json",
+            "-show_format",
+            "-show_chapters",
+            "-show_streams",
+            "-select_streams", "a",
+            str(path),
+        ]
         try:
-            info = ffmpeg.probe(path, show_format=None, show_chapters=None, show_streams=None, select_streams='a')
-        except ffmpeg.Error as e:
-            raise Exception(e.stderr.decode('utf8')) from e
+            out = run(cmd, capture_output=True, check=True).stdout.decode('utf-8')
+            info = json.loads(out)
+        except CalledProcessError as e:
+            raise RuntimeError(f"Failed to load audio:\n {e.stderr.decode('utf-8')}") from e
 
         title = info.get('format', {}).get('tags', {}).get('title', path.name)
         duration = info['duration'] if 'duration' in info else info['format']['duration']

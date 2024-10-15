@@ -1,4 +1,6 @@
 .env
+ats/calign/calign.c
+ats/extra/hirschberg.c
 __pycache__/
 .vscode/
 build/

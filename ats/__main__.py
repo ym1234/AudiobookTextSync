@@ -2,12 +2,12 @@ import align
 import calign
 
 import time
-import multiprocessing
 
-from lang import get_lang
+from ats.lang import get_lang
 
-from audio import AudioFile, TranscribedAudioStream, TranscribedAudioFile
-from text import TextFile, SubFile, SubLine
+from ats.audio import AudioFile #, TranscribedAudioStream, TranscribedAudioFile
+from ats.text import TextFile, SubFile, SubLine
+from ats.model import Model
 
 from pathlib import Path
 from itertools import chain
@@ -195,35 +195,35 @@ def to_subs(text, subs, alignment, offset, references):
         segments.append(SubLine(idx=ai, content=line if line.strip() else '＊'+s['text'], start=s['start']+offset, end=s['end']+offset))
     return segments
 
-def do_batch(aligner, ach, tch, prepend, append, nopend, offset):
-    acontent = []
-    boff = 0
-    for a in ach:
-        for p in a[0].segments:
-            p['start'] += boff
-            p['end'] += boff
-            acontent.append(p)
-        boff += a[1]
+# def do_batch(aligner, ach, tch, prepend, append, nopend, offset):
+#     acontent = []
+#     boff = 0
+#     for a in ach:
+#         for p in a[0].segments:
+#             p['start'] += boff
+#             p['end'] += boff
+#             acontent.append(p)
+#         boff += a[1]
 
-    language = get_lang(ach[0][0].language, prepend, append, nopend)
+#     language = get_lang(ach[0][0].language, prepend, append, nopend)
 
-    tcontent = [p for t in tch for p in t.text()]
-    alignment, references = align.align(None, aligner, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
-    return to_subs(tcontent, acontent, alignment, offset, None)
+#     tcontent = [p for t in tch for p in t.text()]
+#     alignment, references = align.align(None, aligner, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
+#     return to_subs(tcontent, acontent, alignment, offset, None)
 
-def faster_transcribe(model, audiofile, idx, **args):
-    gen, info = model.transcribe(audiofile.chapters[idx].audio(), best_of=1, **args)
-    segments, prev_end = [], 0
-    with tqdm(total=info.duration, unit_scale=True, unit=" seconds") as pbar:
-        pbar.set_description(audiofile.chapters[idx].title)
-        for segment in gen:
-            segments.append(segment._asdict())
-            pbar.update(segment.end - prev_end)
-            prev_end = segment.end
-        pbar.update(info.duration - prev_end)
-        pbar.refresh()
+# def faster_transcribe(model, audiofile, idx, **args):
+#     gen, info = model.transcribe(audiofile.chapters[idx].audio(), best_of=1, **args)
+#     segments, prev_end = [], 0
+#     with tqdm(total=info.duration, unit_scale=True, unit=" seconds") as pbar:
+#         pbar.set_description(audiofile.chapters[idx].title)
+#         for segment in gen:
+#             segments.append(segment._asdict())
+#             pbar.update(segment.end - prev_end)
+#             prev_end = segment.end
+#         pbar.update(info.duration - prev_end)
+#         pbar.refresh()
 
-    return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
+#     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
 
 
 def prompt(message, lchoices):
@@ -254,7 +254,7 @@ def alass(audio, text, language, output_dir, output_format, overwrite,
           path, args, sort):
     import tempfile
     import subprocess
-    import torch
+    import torch # TODO
     from natsort import natsorted
 
     audio = natsorted(audio, lambda x: x.path.name) if sort else audio
@@ -266,7 +266,6 @@ def alass(audio, text, language, output_dir, output_format, overwrite,
     if len(audio) != len(text):
         print("len(audio) != len(text), input needs to be in order for alass alignment")
         return
-
     model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', onnx=True) # onnx is much faster
     (get_speech_timestamps, *_) = utils
 
@@ -287,31 +286,39 @@ def alass(audio, text, language, output_dir, output_format, overwrite,
 
 
 def whisper(audio, text, language, output_dir, output_format, file_overwrite,
-            model, device, threads, local_only, memsize, quantize,
+            model, device, batch_size,
+            local_only, memsize, quantize,
             use_cache, cache_dir, overwrite_cache,
             prepend_punctuations, append_punctuations, nopend_punctuations,
             **model_args):
-    from faster_whisper import WhisperModel
-    cache = Cache(model_name=model, enabled=use_cache, cache_dir=cache_dir)
-    model = WhisperModel(model, device, local_files_only=local_only, cpu_threads=threads,
-                         compute_type={'cpu': 'int8', 'cuda': 'float16'} if quantize else 'float32')
+    # cache = Cache(model_name=model, enabled=use_cache, cache_dir=cache_dir)
+    model = Model(model, device, quantize=quantize, local_files_only=local_only)
+    print(f"Using device: {model.device} with {model.compute_type} compute.")
 
     print('Transcribing...')
 
-    in_cache = [(i, j) for i, a in enumerate(audio) for j, c in enumerate(a.chapters) if cache.get(a.path.name, c.id)] if not overwrite_cache else set()
-    for i, v in enumerate(in_cache):
-        name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
-        print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
-    in_cache = set(in_cache) - {in_cache[i] for i in prompt('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ', len(in_cache))}
+    # in_cache = [(i, j) for i, a in enumerate(audio) for j, c in enumerate(a.chapters) if cache.get(a.path.name, c.id)] if not overwrite_cache else set()
+    # for i, v in enumerate(in_cache):
+    #     name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
+    #     print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
+    # in_cache = set(in_cache) - {in_cache[i] for i in prompt('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ', len(in_cache))}
+
+
+    streams = []
+    for a in audio:
+        s = [i for i, s in enumerate(a.streams) if s.default][0]
+        streams.extend([a.mel(cid=i, sid=s, n_mels=model.n_mels) for i, _ in enumerate(a.chapters)])
 
     s = time.monotonic()
-    transcribed_audio = []
-    for i, a in enumerate(audio):
-        cf = []
-        for j, c in enumerate(a.chapters):
-            t = cache.get(a.path.name, c.id) if (i, j) in in_cache else cache.put(a.path.name, c.id, faster_transcribe(model, a, j, **model_args))
-            cf.append(TranscribedAudioStream.from_map(c, t))
-        transcribed_audio.append(TranscribedAudioFile(file=a, chapters=cf))
+    transcribed_audio = model.transcribe(streams, batch_size)
+
+    # transcribed_audio = []
+    # for i, a in enumerate(audio):
+    #     cf = []
+    #     for j, c in enumerate(a.chapters):
+    #         t = cache.get(a.path.name, c.id) if (i, j) in in_cache else cache.put(a.path.name, c.id, faster_transcribe(model, a, j, **model_args))
+    #         cf.append(TranscribedAudioStream.from_map(c, t))
+    #     transcribed_audio.append(TranscribedAudioFile(file=a, chapters=cf))
     print(f"Transcribing took: {time.monotonic()-s:.2f}s")
 
     aligner = calign.Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
@@ -374,7 +381,6 @@ if __name__ == "__main__":
 
     whisper_parser.add_argument("--model", default="tiny", help="whisper model to use. can be one of tiny, small, large, huge")
     whisper_parser.add_argument("--device", default='auto', help="device to do inference on")
-    whisper_parser.add_argument("--threads", type=int, default=multiprocessing.cpu_count(), help="number of threads")
     whisper_parser.add_argument("--local-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
 
@@ -384,17 +390,16 @@ if __name__ == "__main__":
 
     whisper_parser.add_argument("--word_timestamps", default=False, help="extract word-level timestamps and refine the results based on them", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
     whisper_parser.add_argument("--beam_size", type=int, default=1, help="number of beams in beam search, only applicable when temperature is zero")
     whisper_parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
     whisper_parser.add_argument("--length_penalty", type=float, default=1, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
     whisper_parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
     whisper_parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
-    whisper_parser.add_argument("--condition_on_previous_text", default=False, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop", action=argparse.BooleanOptionalAction)
 
     whisper_parser.add_argument("--temperature", type=float, default=0, help="temperature to use for sampling")
     # whisper_parser.add_argument("--temperature_increment_on_fallback", type=float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
-    whisper_parser.add_argument("--compression_ratio_threshold", type=float, default=2.4, help="if the gzip compression ratio is higher than this value, treat the decoding as failed")
     whisper_parser.add_argument("--log_prob_threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
     whisper_parser.add_argument("--no_speech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
 
@@ -410,8 +415,6 @@ if __name__ == "__main__":
     print("Loading...")
     audio = list(chain.from_iterable([AudioFile.from_file(f)] if f.is_file() else AudioFile.from_dir(f) for f in args.pop('audio')))
     text  = list(chain.from_iterable([TextFile.from_file(f)] if f.is_file() else TextFile.from_dir(f) for f in args.pop('text')))
-    pprint(audio)
-    exit(0)
 
     output_dir = args.pop('output_dir')
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -39,9 +39,8 @@ setup(name='ats',
       install_requires=["numpy",
                         "wcwidth",
                         "faster_whisper",
-                        "beautiful_soup", # TODO
+                        "beautifulsoup4", # TODO
                         "tqdm",
-                        "ffmpeg_python",
                         "regex",
                         "EbookLib", # TODO?
                         "chinese_converter",
