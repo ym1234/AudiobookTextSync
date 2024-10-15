@@ -129,8 +129,8 @@ class AudioFile:
             "ffmpeg",
             "-nostdin",
             "-threads", "0",
-            '-ss', str(self.chapters[cid].start),
-            '-to', str(self.chapters[cid].end),
+            '-ss', str(self.chapters[cid].start if cid is not None else '0'),
+            '-to', str(self.chapters[cid].end if cid is not None else self.duration),
             "-i",  str(self.path),
             "-f", "f32le",
             "-ac", "1",
@@ -201,8 +201,8 @@ class AudioFile:
         title = info.get('format', {}).get('tags', {}).get('title', path.name)
         duration = info['duration'] if 'duration' in info else info['format']['duration']
         chapters = [Chapter(cid=c['id'], title=c.get('tags', {}).get('title', ''), start=c['start_time'], end=c['end_time'])
-                    for c in info['chapters']]
-        streams  = [Stream(idx=s['index'], duration=s['duration'], language=s['tags'].get('language', ''), default=bool(s['disposition']['default']))
+                    for c in info['chapters']] or [Chapter(cid=0, title=title, start=0, end=duration)]
+        streams  = [Stream(idx=s['index'], duration=s.get('duration', duration), language=s['tags'].get('language', ''), default=bool(s['disposition']['default']))
                     for s in info['streams']]
         return cls(path=path, title=title, duration=duration, chapters=chapters, streams=streams)
 

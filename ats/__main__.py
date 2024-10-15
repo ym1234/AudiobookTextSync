@@ -307,10 +307,33 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
     streams = []
     for a in audio:
         s = [i for i, s in enumerate(a.streams) if s.default][0]
+        # streams.append(a.mel(cid=None, sid=s, n_mels=model.n_mels))
         streams.extend([a.mel(cid=i, sid=s, n_mels=model.n_mels) for i, _ in enumerate(a.chapters)])
+    print(len(streams))
 
     s = time.monotonic()
-    transcribed_audio = model.transcribe(streams, batch_size)
+    results = model.transcribe(streams, batch_size)
+    grouped = []
+    idk = 0
+    for a in audio:
+        grouped.append(results[idk:idk+len(a.chapters)])
+        idk += len(a.chapters)
+
+    f = []
+    for i, a in enumerate(audio):
+        f.append([])
+        chapters = grouped[i]
+        for i, k in enumerate(chapters):
+            c = a.chapters[i]
+            offset = float(c.start)
+            f[-1].extend([SubLine(idx=-1, start=j.start + offset, end=j.end + offset, content=j.content) for j in k])
+
+    for i, segments in enumerate(f):
+        out = output_dir / (audio[i].path.stem + '.' + output_format)
+        with out.open("w", encoding='utf8') as o:
+            o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
+
+    exit(0)
 
     # transcribed_audio = []
     # for i, a in enumerate(audio):

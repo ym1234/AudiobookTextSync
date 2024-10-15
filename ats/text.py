@@ -58,7 +58,7 @@ def _parse_srt_style(content, content_start, timing_idx):
         l = n.split('\n')
         timing, content = l[timing_idx], '\n'.join(l[timing_idx+1:])
         start, end = _parse_timing(timing)
-        ps.append(SubLine(idx=i, content=content, start=start, end=end))
+        ps.append(SubLine(idx=i, content=content, start=start, end=end, references=[]))
     return ps
 
 @dataclass(eq=True, frozen=True)
