@@ -160,7 +160,7 @@ class Model:
 
     def encode(self, features):
         features = np.ascontiguousarray(features)
-        features = StorageView.from_array(features)
+        features = StorageView.from_array(features.astype(np.float32))
         return self.model.encode(features)#, to_cpu=to_cpu)
 
     def transcribe(self, streams, batch_size, language=None): # todo more params

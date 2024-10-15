@@ -148,7 +148,9 @@ class AudioFile:
         cur[:N_FFT//2] = cur[N_FFT//2:N_FFT][::-1] # reflect
 
         while not end:
-            yield to_mel(cur)
+            r = to_mel(cur)
+            print(r.dtype)
+            yield r
             cur[:N_FFT - HOP_LENGTH] = cur[-N_FFT+HOP_LENGTH:]
             nread, end = read_full(process.stdout, cur, N_FFT - HOP_LENGTH)
 
