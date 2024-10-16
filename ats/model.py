@@ -37,6 +37,8 @@ def _import_c2():
         pass
     return c2ext.Whisper, c2ext.WhisperGenerationResult, c2ext.get_cuda_device_count, c2ext.get_supported_compute_types, c2ext.StorageView
 Whisper, WhisperGenerationResult, get_cuda_device_count, get_supported_compute_types, StorageView, = _import_c2()
+# import ctranslate2
+# Whisper, WhisperGenerationResult, get_cuda_device_count, get_supported_compute_types, StorageView = ctranslate2.models.Whisper, ctranslate2.models.WhisperGenerationResult, ctranslate2.get_cuda_device_count, ctranslate2.get_supported_compute_types, ctranslate2.StorageView
 
 _MODELS = {
     "tiny.en": "Systran/faster-whisper-tiny.en",
@@ -165,12 +167,14 @@ class Model:
 
     def transcribe(self, streams, batch_size, language=None): # todo more params
         results = [[] for i in range(len(streams))]
-        languages = language if isinstance(language, list) else [language] * len(streams)
+        languages = [self.tokenizer.token_to_id("<|"+l+"|>") for l in language] if isinstance(language, list) else [self.tokenizer.token_to_id("<|"+language+"|>")] * len(streams)
 
         batch_size = min(len(streams), batch_size)
 
         active = list(range(batch_size))
-        buffers = [next(streams[i]) for i in range(batch_size)]
+        t = [next(streams[i]) for i in range(batch_size)]
+        buffers = [k[0] for k in t]
+        ends = [k[1] for k in t]
         seeks = [0] * batch_size # offsets?
         pending = batch_size
 
@@ -188,8 +192,7 @@ class Model:
 
             rs = self.model.generate(encoded,
                                      [[self.tokenizer.sot, languages[i], self.tokenizer.transcribe] for i in active],
-                                     return_scores=True, suppress_blank=False, return_no_speech_prob=True, repetition_penalty=5,
-                                     beam_size=5)
+                                     return_scores=True, suppress_blank=True, return_no_speech_prob=True, sampling_temperature=0, sampling_topk=5, num_hypotheses=5)
             discard = []
             for i, r in enumerate(rs):
                 segments = self.tokenizer.decode_with_timestamps(r.sequences_ids[0])
@@ -197,7 +200,6 @@ class Model:
                 if segments[-1][-1]  < self.tokenizer.timestamp_begin:
                     print(r.sequences_ids[0])
                     print(i, "DECODING FAILED")
-                    # exit(0)
 
                 seek = (segments[-1][-1] - self.tokenizer.timestamp_begin) * 2
                 pseek = seeks[i]
@@ -205,7 +207,7 @@ class Model:
                 results[active[i]].append((pseek, pseek+seek, segments))
                 seeks[i]  = seek + pseek
 
-                if seek >= buffers[i].shape[-1]:
+                if ends[i] and seek >= buffers[i].shape[-1]:
                     if pending < len(streams):
                         active[i] = pending
                         buffers[i] = next(streams[pending])
@@ -215,9 +217,10 @@ class Model:
                         discard.append(i)
                 else:
                     buffers[i] = buffers[i][:, seek:]
-                    if buffers[i].shape[-1] < 3000:
+                    if not ends[i] and buffers[i].shape[-1] < 3000:
                         try:
-                            n = next(streams[active[i]])
+                            n, nend = next(streams[active[i]])
+                            ends[i] = nend
                             buffers[i] = np.concatenate((buffers[i], n), axis=-1)
                         except StopIteration:
                             pass

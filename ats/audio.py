@@ -103,7 +103,7 @@ class AudioFile:
 
     streams: list
     chapters: list
-    def mel(self, cid, sid, n_mels=80):
+    def mel(self, cid, sid, num_chunks=10, n_mels=80):
         filters = get_mel_filters(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
         window = np.hanning(N_FFT + 1)[:-1].astype(np.float32)
         num_fft_bins = (N_FFT >> 1) + 1
@@ -141,22 +141,20 @@ class AudioFile:
         ]
 
         dt = np.dtype(np.float32).newbyteorder('<')
-        cur = np.zeros(CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=dt)
-        process = Popen(cmd, bufsize=10*cur.nbytes, stdout=PIPE, stderr=PIPE)
+        cur = np.zeros(num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=dt)
+        process = Popen(cmd, bufsize=num_chunks*5*cur.nbytes, stdout=PIPE, stderr=PIPE)
 
         nread, end = read_full(process.stdout, cur, N_FFT//2)
         cur[:N_FFT//2] = cur[N_FFT//2:N_FFT][::-1] # reflect
 
         while not end:
-            r = to_mel(cur)
-            print(r.dtype)
-            yield r
+            yield to_mel(cur), False
             cur[:N_FFT - HOP_LENGTH] = cur[-N_FFT+HOP_LENGTH:]
             nread, end = read_full(process.stdout, cur, N_FFT - HOP_LENGTH)
 
         leftover = N_FFT - nread % N_FFT
         cur[nread:nread+leftover] = cur[nread-leftover:nread][::-1]
-        yield to_mel(cur[:nread+leftover])[:, :-1]
+        yield to_mel(cur[:nread+leftover])[:, :-1], True
 
 
     def get_wave(self, chapter, sidx):
@@ -187,7 +185,7 @@ class AudioFile:
         cmd = [
             "ffprobe",
             "-threads", "0",
-            "-output_format", "json",
+            "-print_format", "json", # output_format/print_format
             "-show_format",
             "-show_chapters",
             "-show_streams",

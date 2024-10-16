@@ -312,7 +312,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
     print(len(streams))
 
     s = time.monotonic()
-    results = model.transcribe(streams, batch_size)
+    results = model.transcribe(streams, batch_size, language=language)
     grouped = []
     idk = 0
     for a in audio:
