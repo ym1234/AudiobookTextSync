@@ -218,12 +218,9 @@ class Model:
                 else:
                     buffers[i] = buffers[i][:, seek:]
                     if not ends[i] and buffers[i].shape[-1] < 3000:
-                        try:
-                            n, nend = next(streams[active[i]])
-                            ends[i] = nend
-                            buffers[i] = np.concatenate((buffers[i], n), axis=-1)
-                        except StopIteration:
-                            pass
+                        n, nend = next(streams[active[i]])
+                        ends[i] = nend
+                        buffers[i] = np.concatenate((buffers[i], n), axis=-1)
                 print(i, buffers[i].shape, seek, r.scores, r.no_speech_prob, self.tokenizer.decode(r.sequences_ids[0]))
             for k in discard:
                 batch_size -= 1
