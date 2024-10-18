@@ -260,6 +260,7 @@ class Model:
             for k in discard:
                 batch_size -= 1
                 active.pop(k)
+                ends.pop(k)
                 buffers.pop(k)
                 seeks.pop(k)
 

@@ -103,7 +103,7 @@ class AudioFile:
 
     streams: list
     chapters: list
-    def mel(self, cid, sid, num_chunks=10, n_mels=80):
+    def mel(self, cid, sid, num_chunks=40, n_mels=80):
         filters = get_mel_filters(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
         window = np.hanning(N_FFT + 1)[:-1].astype(np.float32)
         num_fft_bins = (N_FFT >> 1) + 1
