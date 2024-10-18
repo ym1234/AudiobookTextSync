@@ -142,7 +142,7 @@ class AudioFile:
 
         dt = np.dtype(np.float32).newbyteorder('<')
         cur = np.zeros(num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=dt)
-        process = Popen(cmd, bufsize=num_chunks*5*cur.nbytes, stdout=PIPE, stderr=PIPE)
+        process = Popen(cmd, bufsize=5*cur.nbytes, stdout=PIPE, stderr=PIPE)
 
         nread, end = read_full(process.stdout, cur, N_FFT//2)
         cur[:N_FFT//2] = cur[N_FFT//2:N_FFT][::-1] # reflect
