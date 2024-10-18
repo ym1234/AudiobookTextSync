@@ -305,14 +305,15 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
 
 
     streams = []
+    bars = []
     for a in audio:
         s = [i for i, s in enumerate(a.streams) if s.default][0]
         # streams.append(a.mel(cid=None, sid=s, n_mels=model.n_mels))
         streams.extend([a.mel(cid=i, sid=s, n_mels=model.n_mels) for i, _ in enumerate(a.chapters)])
-    print(len(streams))
+        bars.extend([tqdm(total=int(float(c.end)-float(c.start)), unit_scale=True, unit=" seconds", desc=f"{a.title}/{c.title}", position=len(bars)+i) for i, c in enumerate(a.chapters)])
 
     s = time.monotonic()
-    results = model.transcribe(streams, batch_size, language=language)
+    results = model.transcribe(streams, bars, batch_size, language=language, **model_args)
     grouped = []
     idk = 0
     for a in audio:
@@ -411,20 +412,21 @@ if __name__ == "__main__":
     whisper_parser.add_argument("--overwrite-cache", default=False, help="always overwrite the cache", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument("--cache-dir", default="AudiobookTextSyncCache", help="Cache directory")
 
-    whisper_parser.add_argument("--word_timestamps", default=False, help="extract word-level timestamps and refine the results based on them", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
     whisper_parser.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
-    whisper_parser.add_argument("--beam_size", type=int, default=1, help="number of beams in beam search, only applicable when temperature is zero")
+
+    whisper_parser.add_argument("--beam-size", type=int, default=1, help="number of beams in beam search, only applicable when temperature is zero")
     whisper_parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
+    whisper_parser.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
     whisper_parser.add_argument("--length_penalty", type=float, default=1, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
+    whisper_parser.add_argument("--repetition-penalty", type=float, default=5, help="penalty applied to the score of previously generated tokens")
+    whisper_parser.add_argument("--no-repeat-ngram-size", type=float, default=3, help="penalty applied to the score of previously generated tokens")
 
     whisper_parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
-    whisper_parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
 
-    whisper_parser.add_argument("--temperature", type=float, default=0, help="temperature to use for sampling")
-    # whisper_parser.add_argument("--temperature_increment_on_fallback", type=float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
-    whisper_parser.add_argument("--log_prob_threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
-    whisper_parser.add_argument("--no_speech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
+    whisper_parser.add_argument("--sampling-temperature", type=float, default=0.5, help="temperature to use for sampling")
+    whisper_parser.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
+    whisper_parser.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
 
     whisper_parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
     whisper_parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")

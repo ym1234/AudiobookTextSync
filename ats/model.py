@@ -7,6 +7,7 @@ import numpy as np
 from functools import cached_property
 from pprint import pprint
 from ats.text import SubLine
+from tqdm import tqdm
 
 # Stupid hack because python doesn't have lazy imports (torch)
 def _import_c2():
@@ -163,9 +164,28 @@ class Model:
     def encode(self, features):
         features = np.ascontiguousarray(features)
         features = StorageView.from_array(features.astype(np.float32))
-        return self.model.encode(features)#, to_cpu=to_cpu)
+        return self.model.encode(features, to_cpu=False)
 
-    def transcribe(self, streams, batch_size, language=None): # todo more params
+    def transcribe(self, streams, bars, batch_size,
+                   beam_size, patience, num_hypotheses, length_penalty,
+                   repetition_penalty, no_repeat_ngram_size, suppress_tokens, sampling_temperature,
+                   logprob_threshold, nospeech_threshold, language=None):
+
+        if beam_size > 1 and sampling_temperature > 0:
+            raise Exception("beam_size != 1 and sampling_temperature > 0")
+        if beam_size > 1 and num_hypotheses > 1:
+            raise Exception("beam_size > 1 and num_hypotheses > 1")
+        if sampling_temperature == 0 and num_hypotheses > 1:
+            raise Exception("sampling_temperature == 0 and num_hypotheses > 1")
+        if beam_size == 1 and patience > 1:
+            raise Exception("beam_size == 1 and patience > 1")
+        if length_penalty > 1 or length_penalty < 0:
+            raise Exception("length_penalty > 1 or length_penalty < 0")
+
+        if num_hypotheses:
+            beam_size = 1
+            sampling_topk = 0
+
         results = [[] for i in range(len(streams))]
         languages = [self.tokenizer.token_to_id("<|"+l+"|>") for l in language] if isinstance(language, list) else [self.tokenizer.token_to_id("<|"+language+"|>")] * len(streams)
 
@@ -175,31 +195,40 @@ class Model:
         t = [next(streams[i]) for i in range(batch_size)]
         buffers = [k[0] for k in t]
         ends = [k[1] for k in t]
-        seeks = [0] * batch_size # offsets?
+        seeks = [0] * batch_size
         pending = batch_size
 
         while len(active):
+            s = time.monotonic()
             pads = [max(0, 3000 - b.shape[-1]) for b in buffers]
             padded = [np.pad(b[:, :3000], [(0, 0), (0, pads[i])]) for i, b in enumerate(buffers)]
 
             batch = np.stack(padded)
+            batch = np.ascontiguousarray(batch)
             encoded = self.encode(batch)
+            tqdm.write(f"encoding {time.monotonic()-s:.2f}")
 
             if any(languages[k] is None for k in active):
                 r = self.model.detect_language(encoded)
                 for i, k in enumerate(active):
                     languages[k] = self.tokenizer.token_to_id(r[i][0][0])
 
+            s = time.monotonic()
             rs = self.model.generate(encoded,
                                      [[self.tokenizer.sot, languages[i], self.tokenizer.transcribe] for i in active],
-                                     return_scores=True, suppress_blank=True, return_no_speech_prob=True, sampling_temperature=0, sampling_topk=5, num_hypotheses=5)
+                                     return_scores=True, suppress_blank=True, return_no_speech_prob=True,
+                                     sampling_temperature=sampling_temperature, sampling_topk=sampling_topk,
+                                     num_hypotheses=num_hypotheses, beam_size=beam_size, length_penalty=length_penalty, patience=patience,
+                                     no_repeat_ngram_size=no_repeat_ngram_size, suppress_tokens=suppress_tokens)
+            tqdm.write(f"decoding {time.monotonic()-s:.2f}")
+
             discard = []
             for i, r in enumerate(rs):
+                bar = bars[active[i]]
                 segments = self.tokenizer.decode_with_timestamps(r.sequences_ids[0])
 
-                if segments[-1][-1]  < self.tokenizer.timestamp_begin:
-                    print(r.sequences_ids[0])
-                    print(i, "DECODING FAILED")
+                if segments[-1][-1] < self.tokenizer.timestamp_begin:
+                    bar.write(f"{i} DECODING FAILED")
 
                 seek = (segments[-1][-1] - self.tokenizer.timestamp_begin) * 2
                 pseek = seeks[i]
@@ -208,20 +237,26 @@ class Model:
                 seeks[i]  = seek + pseek
 
                 if ends[i] and seek >= buffers[i].shape[-1]:
+                    bar.update(bar.total - bar.n)
+                    bar.close()
                     if pending < len(streams):
                         active[i] = pending
-                        buffers[i] = next(streams[pending])
+                        n, end = next(streams[pending])
+                        buffers[i] = n
+                        ends[i] = end
                         seeks[i] = 0
                         pending += 1
                     else:
                         discard.append(i)
                 else:
+                    bar.update(int(seek*0.01))
                     buffers[i] = buffers[i][:, seek:]
                     if not ends[i] and buffers[i].shape[-1] < 3000:
                         n, nend = next(streams[active[i]])
                         ends[i] = nend
                         buffers[i] = np.concatenate((buffers[i], n), axis=-1)
-                print(i, buffers[i].shape, seek, r.scores, r.no_speech_prob, self.tokenizer.decode(r.sequences_ids[0]))
+                bar.refresh()
+                # print(i, buffers[i].shape, seek, r.scores, r.no_speech_prob, self.tokenizer.decode(r.sequences_ids[0]))
             for k in discard:
                 batch_size -= 1
                 active.pop(k)
