@@ -1,3 +1,5 @@
+import os
+os.environ['CT2_VERBOSE'] = '1'
 import ats.align
 import ats.calign
 
