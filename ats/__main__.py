@@ -310,7 +310,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
         s = [i for i, s in enumerate(a.streams) if s.default][0]
         # streams.append(a.mel(cid=None, sid=s, n_mels=model.n_mels))
         streams.extend([a.mel(cid=i, sid=s, n_mels=model.n_mels) for i, _ in enumerate(a.chapters)])
-        bars.extend([tqdm(total=int(float(c.end)-float(c.start)), unit_scale=True, unit=" seconds", desc=f"{a.title}/{c.title}", position=len(bars)+i) for i, c in enumerate(a.chapters)])
+        bars.extend([tqdm(total=float(c.end)-float(c.start), unit_scale=True, unit=" seconds", desc=f"{a.title}/{c.title}", position=len(bars)+i) for i, c in enumerate(a.chapters)])
 
     s = time.monotonic()
     results = model.transcribe(streams, bars, batch_size, language=language, **model_args)
@@ -418,13 +418,17 @@ if __name__ == "__main__":
     whisper_parser.add_argument("--beam-size", type=int, default=1, help="number of beams in beam search, only applicable when temperature is zero")
     whisper_parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
     whisper_parser.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
-    whisper_parser.add_argument("--length_penalty", type=float, default=1, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
-    whisper_parser.add_argument("--repetition-penalty", type=float, default=5, help="penalty applied to the score of previously generated tokens")
-    whisper_parser.add_argument("--no-repeat-ngram-size", type=float, default=3, help="penalty applied to the score of previously generated tokens")
+    whisper_parser.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
-    whisper_parser.add_argument("--suppress_tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
+    whisper_parser.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
+    whisper_parser.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
+    whisper_parser.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=300, help="maximum index of the first predicted timestamp")
 
-    whisper_parser.add_argument("--sampling-temperature", type=float, default=0.5, help="temperature to use for sampling")
+    whisper_parser.add_argument("--suppress-blank", default=True, help="suppress blank tokens at the start of sampling", action=argparse.BooleanOptionalAction)
+    whisper_parser.add_argument("--suppress-tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
+
+    whisper_parser.add_argument("--temperatures", default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
+    whisper_parser.add_argument("--sampling-topk", default=0, nargs='+', help="only use the top k tokens for sampling")
     whisper_parser.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
     whisper_parser.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
 
