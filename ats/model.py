@@ -150,8 +150,8 @@ class Model:
         self.model = Whisper(model_path,
                              device='cpu' if get_cuda_device_count() == 0 else device,
                              device_index=device_index,
-                             compute_type='auto' if quantize else 'default',
-                             intra_threads=multiprocessing.cpu_count())
+                             compute_type='auto' if quantize else 'default')
+                             # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
         self.tokenizer = Tokenizer(path=model_path)
 
     @property
@@ -176,19 +176,26 @@ class Model:
 
         prompts = [[self.tokenizer.sot, l, self.tokenizer.transcribe] for l in languages]
         needs_fallback = [True]*batch_size
-        for t in temperatures:
+        for i, t in enumerate(temperatures):
             # explore more combinations?
-            decode_args = {"beam_size": beam_size, "patience": patience} if t == 0 else {"beam_size": 1, "num_hypotheses": num_hypotheses, "sampling_temperature": t}
+            # beam size alone is trash
+            decode_args = {"beam_size": beam_size, "patience": patience, "sampling_temperature": t}
+            if i != 0:
+                decode_args['num_hypotheses'] = num_hypotheses
+            # decode_args = {"beam_size": beam_size, "patience": patience} if i == 0 else {"beam_size": beam_size, "num_hypotheses": num_hypotheses}
+            # decode_args = {"beam_size": beam_size, "patience": patience, "num_hypotheses": num_hypotheses, "sampling_temperature": t}
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):
                 no_speech[i] = r.no_speech_prob
                 for j, k in enumerate(r.sequences_ids):
-                    if k[-1] >= self.tokenizer.timestamp_begin: # only well formed sequences
+                    if k[-1] >= self.tokenizer.timestamp_begin and k[-1] < (self.tokenizer.timestamp_begin + 1500): # only well formed sequences
                         avg_logprob = r.scores[j] / (len(k)+1)
                         needs_fallback[i] &= avg_logprob < logprob_threshold and no_speech[i] < nospeech_threshold
                         if avg_logprob > logprob_threshold:
                             cands[i].append((r.scores[j], k))
+                    else:
+                        tqdm.write(f"FAILED {k[-1] >= self.tokenizer.timestamp_begin} {k[-1] < (self.tokenizer.timestamp_begin + 1500)}")
 
             tqdm.write(str(needs_fallback))
             if all(not k for k in needs_fallback):
@@ -197,9 +204,10 @@ class Model:
         results = []
         for c in cands:
             if c == []:
+                tqdm.write("Decoding failed")
                 results.append(None)
                 continue
-            tqdm.write(pformat(c))
+            # tqdm.write(pformat(c))
             penalty = (lambda x: x[0]/len(x[1])) if length_penalty is None else (lambda x: x[0]/(((5 + len(x[1]))/6)**length_penalty))
             results.append(sorted(c, key=penalty, reverse=True)[0])
 
@@ -225,6 +233,8 @@ class Model:
         ends = [k[1] for k in t]
         seeks = [0] * batch_size
         pending = batch_size
+        for k in active:
+            bars[k].unpause()
 
         while len(active):
             padded = [np.pad(b[:, :3000], [(0, 0), (0, max(0, 3000 - b.shape[-1]))])
@@ -251,7 +261,7 @@ class Model:
                     segments = []
                     seek = 1500
 
-                tqdm.write(pformat(segments))
+                # tqdm.write(pformat(segments))
                 pseek = seeks[i]
 
                 results[active[i]].append((pseek, pseek+seek, segments))
@@ -276,6 +286,7 @@ class Model:
                         n, nend = next(streams[active[i]])
                         ends[i] = nend
                         buffers[i] = np.concatenate((buffers[i], n), axis=-1)
+                        bars[i].unpause()
                 bar.refresh()
             for k in discard:
                 batch_size -= 1
