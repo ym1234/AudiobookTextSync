@@ -161,7 +161,7 @@ class Model:
     @property
     def compute_type(self): return self.model.compute_type
     @property
-    def n_mels(self): return self.model.n_mels
+    def n_mels(self): return 80 #self.model.n_mels
 
     def encode(self, features):
         to_cpu = self.model.device == "cuda" and len(self.model.device_index) > 1
