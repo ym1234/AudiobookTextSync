@@ -150,6 +150,7 @@ class Model:
         num_cuda = get_cuda_device_count()
         device = 'cpu' if  num_cuda == 0 else device
         device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
+        print(device_index)
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
                              # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
         self.tokenizer = Tokenizer(path=model_path)
