@@ -145,12 +145,11 @@ class Tokenizer:
         return words, word_tokens
 
 class Model:
-    def __init__(self, model_size_or_path, device='auto', device_index=0, quantize=True, download_root=None, local_files_only=False):
+    def __init__(self, model_size_or_path, device='auto', device_index=None, quantize=True, download_root=None, local_files_only=False):
         model_path = model_size_or_path if os.path.isdir(model_size_or_path) else download_model(model_size_or_path, download_root, local_files_only)
-        self.model = Whisper(model_path,
-                             device='cpu' if get_cuda_device_count() == 0 else device,
-                             device_index=device_index,
-                             compute_type='auto' if quantize else 'default')
+        device = 'cpu' if get_cuda_device_count() == 0 else device
+        device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
+        self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
                              # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
         self.tokenizer = Tokenizer(path=model_path)
 
