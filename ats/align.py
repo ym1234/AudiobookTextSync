@@ -1,5 +1,4 @@
 import numpy as np
-from Bio import Align
 
 def align_sub(coords1, coords2, ends1, ends2):
     ends2idx = np.searchsorted(coords2, ends2)

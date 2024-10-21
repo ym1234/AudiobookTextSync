@@ -428,7 +428,7 @@ if __name__ == "__main__":
     whisper_parser.add_argument("--suppress-tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
 
     whisper_parser.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
-    whisper_parser.add_argument("--sampling-topk", default=0, help="only use the top k tokens for sampling")
+    whisper_parser.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
     whisper_parser.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
     whisper_parser.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
 

@@ -38,7 +38,7 @@ setup(name='ats',
       ],
       install_requires=["numpy",
                         "wcwidth",
-                        "faster_whisper",
+                        "ctranslate2",
                         "beautifulsoup4", # TODO
                         "tqdm",
                         "regex",
