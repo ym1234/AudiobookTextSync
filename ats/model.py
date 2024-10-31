@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from ats.text import SubLine
 from pprint import pprint
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 # Stupid hack because python doesn't have lazy imports (torch)
 def _import_c2():
