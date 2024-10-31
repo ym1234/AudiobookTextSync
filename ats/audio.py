@@ -77,7 +77,7 @@ def read_full(pipe, buffer, offset):
     return nread, end
 
 class MelProcess:
-    def __init__(self, stream, chapter, n_mels=80, num_chunks=4):
+    def __init__(self, stream, chapter, n_mels=80, num_chunks=20):
         self.cmd = [
             "ffmpeg",
             "-nostdin",
