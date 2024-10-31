@@ -1,4 +1,3 @@
-from math import log2, ceil
 import numpy as np
 import parasail
 import string

@@ -46,6 +46,8 @@ class SubLine(TextParagraph):
     end: float
     def __repr__(self):
         return f"SubLine(text='{self.content}', start={sexagesimal(self.start)}, end={sexagesimal(self.end)})"
+    def offset(self, offset):
+        return SubLine(idx=self.idx, content=self.content, start=self.start+offset, end=self.end+offset)
     def vtt(self, use_comma=False):
         return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.content}"
 

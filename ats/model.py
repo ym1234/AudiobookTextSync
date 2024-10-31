@@ -2,11 +2,12 @@ import os
 import multiprocessing
 import huggingface_hub
 import tokenizers
-import time
 import numpy as np
+from typing import Generator
+from dataclasses import dataclass
 from functools import cached_property
-from pprint import pprint, pformat
 from ats.text import SubLine
+from pprint import pprint
 from tqdm import tqdm
 
 # Stupid hack because python doesn't have lazy imports (torch)
@@ -144,13 +145,35 @@ class Tokenizer:
 
         return words, word_tokens
 
+
+@dataclass
+class Chunk:
+    start: int # in mel frames
+    end: int
+    temperature: float
+    avg_logprob: float
+    nospeech_prob: float
+    tokens: list # idk if i care about this
+    segments: SubLine # start, end in relative to the mel reader or something?
+
+@dataclass
+class _TranscriptionState:
+    idx: int
+    stream: Generator[np.array, None, None]
+    buffer: np.array
+    result: list
+    seek: int
+    bar: tqdm
+    language: int
+    sidx: int
+
 class Model:
     def __init__(self, model_size_or_path, device='auto', device_index=None, quantize=True, download_root=None, local_files_only=False):
         model_path = model_size_or_path if os.path.isdir(model_size_or_path) else download_model(model_size_or_path, download_root, local_files_only)
         num_cuda = get_cuda_device_count()
         device = 'cpu' if  num_cuda == 0 else device
         device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
-        print(device_index)
+        # print(device_index)
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
                              # tensor_parallel=isinstance(device_index, list) and len(device_index) > 1)
                              # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
@@ -179,134 +202,111 @@ class Model:
         prompts = [[self.tokenizer.sot, l, self.tokenizer.transcribe] for l in languages]
         needs_fallback = [True]*batch_size
         for i, t in enumerate(temperatures):
-            # explore more combinations?
             # beam size alone is trash
             decode_args = {"beam_size": beam_size, "patience": patience, "sampling_temperature": t}
             if i != 0:
                 decode_args['num_hypotheses'] = num_hypotheses
-            # decode_args = {"beam_size": beam_size, "patience": patience} if i == 0 else {"beam_size": beam_size, "num_hypotheses": num_hypotheses}
-            # decode_args = {"beam_size": beam_size, "patience": patience, "num_hypotheses": num_hypotheses, "sampling_temperature": t}
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):
                 no_speech[i] = r.no_speech_prob
                 for j, k in enumerate(r.sequences_ids):
-                    if k[-1] >= self.tokenizer.timestamp_begin and k[-1] < (self.tokenizer.timestamp_begin + 1500): # only well formed sequences
-                        avg_logprob = r.scores[j] / (len(k)+1)
-                        needs_fallback[i] &= avg_logprob < logprob_threshold and no_speech[i] < nospeech_threshold
-                        if avg_logprob > logprob_threshold:
-                            cands[i].append((r.scores[j], k))
-                    else:
-                        tqdm.write(f"FAILED {k[-1] >= self.tokenizer.timestamp_begin} {k[-1] < (self.tokenizer.timestamp_begin + 1500)}")
+                    if k[-1] < self.tokenizer.timestamp_begin or k[-1] >= self.tokenizer.timestamp_begin + 1500: # only well formed sequences
+                        continue
+                    avg_logprob = r.scores[j] / (len(k)+1)
+                    needs_fallback[i] &= avg_logprob < logprob_threshold and no_speech[i] < nospeech_threshold
+                    if avg_logprob > logprob_threshold:
+                        cands[i].append((k, r.scores[j], no_speech[i], t))
 
-            tqdm.write(str(needs_fallback))
             if all(not k for k in needs_fallback):
                 break
 
-        results = []
-        for c in cands:
-            if c == []:
-                tqdm.write("Decoding failed")
-                results.append(None)
-                continue
-            # tqdm.write(pformat(c))
-            penalty = (lambda x: x[0]/len(x[1])) if length_penalty is None else (lambda x: x[0]/(((5 + len(x[1]))/6)**length_penalty))
-            results.append(sorted(c, key=penalty, reverse=True)[0])
+        def gnmt(x): return x[1] / ((5 + len(x[0])) / 6)**length_penalty
+        def norm(x): return x[1] / len(x[0])
+        penalty = norm if length_penalty is None else gnmt
+        return [sorted(c, key=penalty)[-1] if c else ([], -1, no_speech[i], -1) for c in cands]
 
-        tqdm.write('')
-
-        return results
-
-    def transcribe(self, streams, bars, batch_size, language=None, **model_args):
-        results = [[] for i in range(len(streams))]
-
+    def transcribe(self, streams, batch_size, language=None, **model_args):
         languages = language if isinstance(language, list) else [language] * len(streams)
-        if language is not None:
-            languages = [self.tokenizer.token_to_id("<|"+l+"|>") for l in languages]
-
-        if len(streams) != len(languages):
-            raise Exception("Idk")
+        languages = [self.tokenizer.token_to_id("<|"+l+"|>") for l in languages] if language is not None else languages
+        assert len(streams) == len(languages)
 
         batch_size = min(len(streams), batch_size)
-
-        active = list(range(batch_size)) # TODO sort by duration
-        t = [next(streams[i]) for i in range(batch_size)]
-        buffers = [k[0] for k in t]
-        ends = [k[1] for k in t]
-        seeks = [0] * batch_size
+        main_bar = tqdm(total=len(streams), desc="Total progress", position=0, leave=True)
+        results = [None for _ in range(len(streams))]
+        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration)#, reverse=True)
         pending = batch_size
+        active = []
+        for i in range(batch_size):
+            idx = streams_sorted[i]
+            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title, leave=True)
+            generator = streams[idx].generator()
+            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), result=[], seek=0, bar=bar, language=languages[idx], sidx=0))
+
         for k in active:
-            bars[k].unpause()
+            k.bar.unpause()
 
         while len(active):
-            padded = [np.pad(b[:, :3000], [(0, 0), (0, max(0, 3000 - b.shape[-1]))])
-                      for b in buffers]
+            padded = [np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, 3000 - a.buffer.shape[-1]))])
+                      for a in active]
             encoded = self.encode(np.stack(padded))
 
-            if any(languages[k] is None for k in active):
+            if any(a.language is None for a in active):
                 r = self.model.detect_language(encoded)
-                for i, k in enumerate(active):
-                    languages[k] = self.tokenizer.token_to_id(r[i][0][0])
+                for i, a in enumerate(active):
+                    a.language = self.tokenizer.token_to_id(r[i][0][0])
 
-            rs = self.generate_with_fallback(encoded, [languages[i] for i in active], **model_args)
-            discard = []
-            for i, r in enumerate(rs):
-                bar = bars[active[i]]
-                if r is not None:
-                    segments = self.tokenizer.decode_with_timestamps(r[1])
+            rs = self.generate_with_fallback(encoded, [a.language for a in active], **model_args)
+            i = 0
+            while i < len(rs):
+                a = active[i]
+                tokens, score, no_speech, temperature = rs[i]
+
+                segments, seek = [], 1500
+                if tokens:
+                    segments = self.tokenizer.decode_with_timestamps(tokens)
                     if len(segments[-1]) == 1:
                         seek = segments[-1][-1] - self.tokenizer.timestamp_begin
                         segments = segments[:-1]
-                    else:
-                        seek = 1500
-                else: # Silence
-                    segments = []
-                    seek = 1500
 
-                # tqdm.write(pformat(segments))
-                pseek = seeks[i]
+                lines = [SubLine(idx=a.sidx+i,
+                                 content=self.tokenizer.decode(s[1:-1]),
+                                 start=(a.seek+s[0]-self.tokenizer.timestamp_begin)*0.02,
+                                 end=(a.seek+s[-1]-self.tokenizer.timestamp_begin)*0.02)
+                         for i, s in enumerate(segments)]
+                a.sidx += len(segments)
 
-                results[active[i]].append((pseek, pseek+seek, segments))
-                seeks[i]  = seek + pseek
+                nc = Chunk(start=a.seek*2, end=a.seek*2+seek*2,
+                           segments=lines, temperature=temperature,
+                           nospeech_prob=no_speech, avg_logprob=score/(len(tokens)+1),
+                           tokens=tokens)
+                a.result.append(nc)
+                a.seek += seek
 
-                if ends[i] and seek >= buffers[i].shape[-1]:
-                    bar.update(bar.total - bar.n)
-                    bar.close()
-                    if pending < len(streams):
-                        active[i] = pending
-                        n, end = next(streams[pending])
-                        buffers[i] = n
-                        ends[i] = end
-                        seeks[i] = 0
-                        pending += 1
-                    else:
-                        discard.append(i)
-                else:
-                    bar.update(seek*0.02)
-                    buffers[i] = buffers[i][:, 2*seek:]
-                    if not ends[i] and buffers[i].shape[-1] < 3000:
-                        n, nend = next(streams[active[i]])
-                        ends[i] = nend
-                        buffers[i] = np.concatenate((buffers[i], n), axis=-1)
-                        bars[i].unpause()
-                bar.refresh()
-            for k in discard:
-                batch_size -= 1
-                active.pop(k)
-                ends.pop(k)
-                buffers.pop(k)
-                seeks.pop(k)
-
-        # TODO trash
-        out = []
-        for k in results:
-            out.append([])
-            for j in k:
-                segments = j[-1]
-                if len(segments):
-                    out[-1].extend([SubLine(idx=-1, content=self.tokenizer.decode(s[1:-1]),
-                                            start=(j[0] + s[0] - self.tokenizer.timestamp_begin)*0.02,
-                                            end=(j[0] + s[-1] - self.tokenizer.timestamp_begin)*0.02)
-                                    for s in segments])
-        return out
+                a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
+                a.buffer = a.buffer[:, 2*seek:]
+                if a.buffer.shape[-1] < 3000:
+                    try:
+                        a.buffer = np.concatenate((a.buffer, next(a.stream)), axis=-1)
+                    except StopIteration:
+                        pass # If I put the rest here the indentation gets kinda deep
+                    if a.buffer.shape[-1] == 0:
+                        results[a.idx] = a.result
+                        a.bar.close()
+                        main_bar.update(1)
+                        if pending < len(streams):
+                            idx = streams_sorted[pending]
+                            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title, leave=True)
+                            generator = streams[idx].generator()
+                            active[i] = _TranscriptionState(idx=idx, stream=generator,
+                                                            buffer=next(generator), seek=0, bar=bar,
+                                                            result=[], language=languages[idx], sidx=0)
+                            pending += 1
+                        else:
+                            active.pop(i)
+                            rs.pop(i)
+                            i -= 1
+                i += 1
+                a.bar.refresh()
+        return results
 

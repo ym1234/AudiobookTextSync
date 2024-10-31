@@ -53,7 +53,8 @@ cdef class BumpAllocator:
 
     def __init__(self, size: int):
         cdef int64_t allocsize = _align(size,  2*1024*1024)
-        cdef void *chunk = mman.mmap(NULL, allocsize, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_ANONYMOUS | mman.MAP_PRIVATE | mman.MAP_POPULATE, -1, 0)
+        cdef void *chunk = mman.mmap(NULL, allocsize, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_ANONYMOUS | mman.MAP_PRIVATE, -1, 0)
+        mman.madvise(chunk, allocsize, mman.MADV_HUGEPAGE)
         if chunk == <void*> -1:
             raise MemoryError("mmap -1")
 

@@ -1,5 +1,4 @@
 import numpy as np
-from pprint import pprint
 
 def traceback(x, y, H, E, F, cx, cy, match, mismatch, gap_open, gap_extend, start=False):
     cur, traceback = 0, []

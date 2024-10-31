@@ -1,65 +1,15 @@
-import ats.align
-import ats.calign
-
-import time
 
 from ats.lang import get_lang
 
-from ats.audio import AudioFile #, TranscribedAudioStream, TranscribedAudioFile
-from ats.text import TextFile, SubFile, SubLine
-from ats.model import Model
+from ats.audio import AudioFile, MelProcess
+from ats.text import TextFile, SubLine
+from ats.model import Model, available_models
 
+import time
 from pathlib import Path
 from itertools import chain
-from wcwidth import wcswidth
-from dataclasses import dataclass
 from tqdm.auto import tqdm
 from functools import partialmethod
-from pprint import pprint
-
-# this feels bad, idk
-# sqlite?
-@dataclass(eq=True)
-class Cache:
-    model_name: str
-    cache_dir: str
-    enabled: bool
-
-    def get_name(self, filename, chid):
-        return filename + '.' + str(chid) +  '.' + self.model_name + ".subs"
-
-    def get(self, filename, chid): # TODO Fix this crap
-        if not self.enabled: return
-        fn = self.get_name(filename, chid)
-        if (q := Path(self.cache_dir) / fn).exists():
-            return eval(q.read_bytes().decode("utf-8"))
-
-    def put(self, filename, chid, content):
-        if not self.enabled: return content
-        cd = Path(self.cache_dir)
-        cd.mkdir(parents=True, exist_ok=True)
-        fn =  self.get_name(filename, chid)
-        p = cd / fn
-
-        if 'text' in content:
-            del content['text']
-        if 'ori_dict' in content:
-            del content['ori_dict']
-
-        # Some of these may be useful but they just take so much space
-        for i in content['segments']:
-            if 'words' in i:
-                del i['words']
-            del i['id']
-            del i['tokens']
-            del i['avg_logprob']
-            del i['temperature']
-            del i['seek']
-            del i['compression_ratio']
-            del i['no_speech_prob']
-
-        p.write_bytes(repr(content).encode('utf-8'))
-        return content
 
 def match_start(aligner, audio, text, prepend, append, nopend):
     ats, sta = {}, {}
@@ -131,6 +81,8 @@ def expand_matches(audio, text, ats, sta):
 
 
 def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-', sep3='::'):
+    from wcwidth import wcswidth
+
     rows = [1, ["Audio", "Text", "Score"]]
     width = [wcswidth(h) for h in rows[-1]]
 
@@ -211,21 +163,6 @@ def to_subs(text, subs, alignment, offset, references):
 #     alignment, references = align.align(None, aligner, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
 #     return to_subs(tcontent, acontent, alignment, offset, None)
 
-# def faster_transcribe(model, audiofile, idx, **args):
-#     gen, info = model.transcribe(audiofile.chapters[idx].audio(), best_of=1, **args)
-#     segments, prev_end = [], 0
-#     with tqdm(total=info.duration, unit_scale=True, unit=" seconds") as pbar:
-#         pbar.set_description(audiofile.chapters[idx].title)
-#         for segment in gen:
-#             segments.append(segment._asdict())
-#             pbar.update(segment.end - prev_end)
-#             prev_end = segment.end
-#         pbar.update(info.duration - prev_end)
-#         pbar.refresh()
-
-#     return {'segments': segments, 'language': args['language'] if 'language' in args else info.language}
-
-
 def prompt(message, lchoices):
     if lchoices == 0:
         return []
@@ -249,41 +186,8 @@ def prompt(message, lchoices):
                 continue
         return r
 
-
-def alass(audio, text, language, output_dir, output_format, overwrite,
-          path, args, sort):
-    import tempfile
-    import subprocess
-    import torch # TODO
-    from natsort import natsorted
-
-    audio = natsorted(audio, lambda x: x.path.name) if sort else audio
-    text = natsorted(text, lambda x: x.path.name) if sort else text
-
-    if not all(isinstance(t, SubFile) for t in text):
-        print('alass inputs should be subtitle files not epubs or text files')
-        return
-    if len(audio) != len(text):
-        print("len(audio) != len(text), input needs to be in order for alass alignment")
-        return
-    model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', onnx=True) # onnx is much faster
-    (get_speech_timestamps, *_) = utils
-
-    with tqdm(zip(audio, text), total=len(audio)) as bar:
-        for a, t in bar:
-            bar.set_description(f'Running VAD on {a.title}')
-            v = get_speech_timestamps(a.audio(), model, sampling_rate=16000, return_seconds=True)
-            bar.set_description(f'Aligning {t.title} with {a.title}')
-            segments = [Segment(text='h', start=s['start'], end=s['end']) for s in v]
-            with tempfile.NamedTemporaryFile(mode="w", suffix='.srt') as f:
-                f.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
-                cmd = [path, *['-'+h for h in args], f.name, str(t.path), str(output_dir / (a.path.stem + ''.join(t.path.suffixes)))]
-                bar.write(' '.join(cmd))
-                try:
-                    subprocess.run(cmd)
-                except subprocess.CalledProcessError as e:
-                    raise RuntimeError(f"Alass command failed: {e.stderr.decode()}\n args: {' '.join(cmd)}") from e
-
+def transcribe():
+    pass
 
 def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             model, device, batch_size,
@@ -305,29 +209,25 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
 
 
     streams = []
-    bars = []
+    idx = [0]
     for a in audio:
-        s = [i for i, s in enumerate(a.streams) if s.default][0]
-        # streams.append(a.mel(cid=None, sid=s, n_mels=model.n_mels))
-        streams.extend([a.mel(cid=i, sid=s, n_mels=model.n_mels) for i, _ in enumerate(a.chapters)])
-        bars.extend([tqdm(total=float(c.end)-float(c.start), unit_scale=True, unit=" seconds", unit_divisor=60, desc=f"{a.title}/{c.title}", position=len(bars)+i) for i, c in enumerate(a.chapters)])
+        s = [s for s in a.streams if s.default][0] # TODO based on language etc
+        streams.extend([MelProcess(stream=s, chapter=c, n_mels=model.n_mels) for c in a.chapters])
+        idx.append(idx[-1] + len(a.chapters))
 
     s = time.monotonic()
-    results = model.transcribe(streams, bars, batch_size, language=language, **model_args)
-    grouped = []
-    idk = 0
-    for a in audio:
-        grouped.append(results[idk:idk+len(a.chapters)])
-        idk += len(a.chapters)
+    results = model.transcribe(streams, batch_size, language=language, **model_args)
+    grouped = [results[idx[i]:idx[i+1]] for i in range(len(idx)-1)]
+    print(len(grouped))
 
     f = []
     for i, a in enumerate(audio):
         f.append([])
         chapters = grouped[i]
-        for i, k in enumerate(chapters):
-            c = a.chapters[i]
-            offset = float(c.start)
-            f[-1].extend([SubLine(idx=-1, start=j.start + offset, end=j.end + offset, content=j.content) for j in k])
+        for i, c in enumerate(chapters):
+            offset = float(a.chapters[i].start)
+            lines = [line.offset(offset) for chunk in c for line in chunk.segments]
+            f[-1].extend(lines)
 
     for i, segments in enumerate(f):
         out = output_dir / (audio[i].path.stem + '.' + output_format)
@@ -383,7 +283,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     parser.add_argument("--text", type=Path, required=True, default=[], action='append', help="path to the script file")
 
-    parser.add_argument("--audio", type=Path, required=True, default=[], action='append', help="list of audio files to process (in the correct order)")
+    parser.add_argument("--audio", type=Path, required=True, default=[], action='append', help="list of audio files to process")
     parser.add_argument("--language", default=None, help="language of the script and audio")
 
     parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
@@ -392,49 +292,38 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default=u'.', type=Path, help="output directory")
     parser.add_argument("--output-format", default='srt', help="output format currently only supports vtt and srt")
 
-    subparsers = parser.add_subparsers(title='Modes')
+    parser.add_argument("--model", default="tiny", help=f"whisper model to use, can be a huggingface path or one of {available_models()}")
+    parser.add_argument("--device", default='auto', help="device to do inference on")
+    parser.add_argument("--local-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
 
-    alass_parser = subparsers.add_parser('alass', help='Use vad+alass to realign')
-    alass_parser.set_defaults(mode=alass)
-    alass_parser.add_argument("--path", default='alass', help="path to alass")
-    alass_parser.add_argument("--args", default=['O0'], nargs="+", help="additional arguments to alass (pass without the dash, eg: O1)")
-    alass_parser.add_argument("--sort", default=True, help="sort the files (natural sort) before grouping", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--use-cache", default=True, help="use the transcription cache", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--overwrite-cache", default=False, help="always overwrite the cache", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--cache-dir", default="AudiobookTextSyncCache", help="Cache directory")
 
-    whisper_parser = subparsers.add_parser('whisper', help='use whisper to align')
-    whisper_parser.set_defaults(mode=whisper)
+    parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
 
-    whisper_parser.add_argument("--model", default="tiny", help="whisper model to use. can be one of tiny, small, large, huge")
-    whisper_parser.add_argument("--device", default='auto', help="device to do inference on")
-    whisper_parser.add_argument("--local-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
+    parser.add_argument("--beam-size", type=int, default=5, help="number of beams in beam search, only applicable when temperature is zero")
+    parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
+    parser.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
+    parser.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
-    whisper_parser.add_argument("--use-cache", default=True, help="use the transcription cache", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--overwrite-cache", default=False, help="always overwrite the cache", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--cache-dir", default="AudiobookTextSyncCache", help="Cache directory")
+    parser.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
+    parser.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
+    parser.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
 
-    whisper_parser.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
+    parser.add_argument("--suppress-blank", default=True, help="suppress blank tokens at the start of sampling", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--suppress-tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
 
-    whisper_parser.add_argument("--beam-size", type=int, default=5, help="number of beams in beam search, only applicable when temperature is zero")
-    whisper_parser.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
-    whisper_parser.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
-    whisper_parser.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
+    parser.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
+    parser.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
+    parser.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
+    parser.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
 
-    whisper_parser.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
-    whisper_parser.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
-    whisper_parser.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
-
-    whisper_parser.add_argument("--suppress-blank", default=True, help="suppress blank tokens at the start of sampling", action=argparse.BooleanOptionalAction)
-    whisper_parser.add_argument("--suppress-tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
-
-    whisper_parser.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
-    whisper_parser.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
-    whisper_parser.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
-    whisper_parser.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
-
-    whisper_parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
-    whisper_parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
-    whisper_parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
+    parser.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
+    parser.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
+    parser.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
 
     args = parser.parse_args().__dict__
     tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.pop('progress'))
@@ -449,4 +338,4 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
     output_format = args.pop('output_format')
 
-    args.pop('mode')(audio, text, language, output_dir, output_format, args.pop('overwrite'), **args)
+    whisper(audio, text, language, output_dir, output_format, args.pop('overwrite'), **args)
