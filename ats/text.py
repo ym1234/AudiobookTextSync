@@ -41,13 +41,16 @@ def sexagesimal(secs, use_comma=False):
     return r
 
 @dataclass(eq=True, frozen=True)
-class SubLine(TextParagraph):
+class SubLine:
+    content: str
     start: float
     end: float
     def __repr__(self):
         return f"SubLine(text='{self.content}', start={sexagesimal(self.start)}, end={sexagesimal(self.end)})"
+    def text(self):
+        return self.content
     def offset(self, offset):
-        return SubLine(idx=self.idx, content=self.content, start=self.start+offset, end=self.end+offset)
+        return SubLine(content=self.content, start=self.start+offset, end=self.end+offset)
     def vtt(self, use_comma=False):
         return f"{sexagesimal(self.start, use_comma)} --> {sexagesimal(self.end, use_comma)}\n{self.content}"
 
@@ -55,12 +58,12 @@ def _conv(f): return sum([float(n) * (60**i) for i, n in enumerate(f.split(':')[
 def _parse_timing(timing): return [_conv(i) for i in timing.replace(',', '.').split("-->")]
 def _parse_srt_style(content, content_start, timing_idx):
     ps = []
-    for i, n in enumerate(content.split('\n\n')[content_start:]):
+    for n in content.split('\n\n')[content_start:]:
         if not n.strip(): continue
         l = n.split('\n')
         timing, content = l[timing_idx], '\n'.join(l[timing_idx+1:])
         start, end = _parse_timing(timing)
-        ps.append(SubLine(idx=i, content=content, start=start, end=end, references=[]))
+        ps.append(SubLine(content=content, start=start, end=end, references=[]))
     return ps
 
 @dataclass(eq=True, frozen=True)

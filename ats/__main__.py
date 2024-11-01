@@ -1,4 +1,5 @@
-
+from ats import align
+from ats.calign import Aligner
 from ats.lang import get_lang
 
 from ats.audio import AudioFile, MelProcess
@@ -11,20 +12,22 @@ from itertools import chain
 from tqdm.auto import tqdm
 from functools import partialmethod
 
+def joinuntil(a, n):
+    l, end = 0, 0
+    while end < len(a) and l < n:
+        l += len(a[end].text())
+        end += 1
+    return ''.join(seg.text() for seg in a[:end])
+
 def match_start(aligner, audio, text, prepend, append, nopend):
     ats, sta = {}, {}
     textcache = {}
     for ai, afile in enumerate(tqdm(audio)):
-        for i, ach in enumerate(tqdm(afile.chapters)):
+        for i, ach in enumerate(tqdm(afile)):
             if (ai, i) in ats: continue
 
             lang = get_lang(ach.language, prepend, append, nopend)
-            # acontent = lang.normalize(lang.clean(''.join(seg['text'] for seg in ach.segments)))
-            l, end = 0, 0
-            while end < len(ach.segments) and l < 2000:
-                l += len(ach.segments[end]['text'])
-                end += 1
-            acontent = ''.join(seg['text'] for seg in ach.segments[:end])
+            acontent = joinuntil(ach.segments, 2000)
 
             best = (-1, -1, 0)
             for ti, tfile in enumerate(text):
@@ -32,13 +35,7 @@ def match_start(aligner, audio, text, prepend, append, nopend):
                     if (ti, j) in sta: continue
 
                     if (ti, j) not in textcache:
-                        li = tfile.chapters[j].text()
-                        l, end = 0, 0
-                        while end < len(li) and l < 2000:
-                            l += len(li[end].text())
-                            end += 1
-                        textcache[ti, j] = ''.join(p.text() for p in li[:end])
-                        # textcache[ti, j] = lang.normalize(lang.clean(''.join(p.text() for p in tfile.chapters[j].text())))
+                        textcache[ti, j] = joinuntil(tfile.chapters[j].text(), 2000)
                     tcontent = textcache[ti, j]
                     if len(acontent) < 100 or len(tcontent) < 100: continue
 
@@ -132,7 +129,7 @@ def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-', sep3='::'
 def to_epub():
     pass
 
-def to_subs(text, subs, alignment, offset, references):
+def to_subs(text, subs, alignment):
     segments = []
     for ai, a in enumerate(alignment):
         if a[0] == -1:
@@ -143,25 +140,9 @@ def to_subs(text, subs, alignment, offset, references):
         line =  line[tso:-len(text[te-1].text())+teo]
         s = subs[ai]
         if False and line.strip(): # Debug
-            line = s['text']+'\n'+line
-        segments.append(SubLine(idx=ai, content=line if line.strip() else '＊'+s['text'], start=s['start']+offset, end=s['end']+offset))
+            line = s.text()+'\n'+line
+        segments.append(SubLine(content=line if line.strip() else '＊'+s.text(), start=s.start, end=s.end))
     return segments
-
-# def do_batch(aligner, ach, tch, prepend, append, nopend, offset):
-#     acontent = []
-#     boff = 0
-#     for a in ach:
-#         for p in a[0].segments:
-#             p['start'] += boff
-#             p['end'] += boff
-#             acontent.append(p)
-#         boff += a[1]
-
-#     language = get_lang(ach[0][0].language, prepend, append, nopend)
-
-#     tcontent = [p for t in tch for p in t.text()]
-#     alignment, references = align.align(None, aligner, language, [p['text'] for p in acontent], [p.text() for p in  tcontent], [], set(prepend), set(append), set(nopend))
-#     return to_subs(tcontent, acontent, alignment, offset, None)
 
 def prompt(message, lchoices):
     if lchoices == 0:
@@ -195,61 +176,23 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             use_cache, cache_dir, overwrite_cache,
             prepend_punctuations, append_punctuations, nopend_punctuations,
             **model_args):
-    # cache = Cache(model_name=model, enabled=use_cache, cache_dir=cache_dir)
+    # TODO redo the cache
     model = Model(model, device, quantize=quantize, local_files_only=local_only)
     print(f"Using device: {model.device} with {model.compute_type} compute.")
 
-    print('Transcribing...')
-
-    # in_cache = [(i, j) for i, a in enumerate(audio) for j, c in enumerate(a.chapters) if cache.get(a.path.name, c.id)] if not overwrite_cache else set()
-    # for i, v in enumerate(in_cache):
-    #     name = audio[v[0]].title+'/'+audio[v[0]].chapters[v[1]].title
-    #     print(('{0: >' + str(len(str(len(in_cache))))+ '} {1}').format(i, name))
-    # in_cache = set(in_cache) - {in_cache[i] for i in prompt('Choose cache files to overwrite: (eg: "1 2 3", "1-3", "^4" (empty for none))\n>> ', len(in_cache))}
-
-
-    streams = []
-    idx = [0]
+    streams, idx = [], [0]
     for a in audio:
         s = [s for s in a.streams if s.default][0] # TODO based on language etc
         streams.extend([MelProcess(stream=s, chapter=c, n_mels=model.n_mels) for c in a.chapters])
         idx.append(idx[-1] + len(a.chapters))
 
-    s = time.monotonic()
-    results = model.transcribe(streams, batch_size, language=language, **model_args)
-    grouped = [results[idx[i]:idx[i+1]] for i in range(len(idx)-1)]
-    print(len(grouped))
+    transcription = model.transcribe(streams, batch_size, language=language, **model_args)
+    transcription_grouped = [transcription[idx[i]:idx[i+1]] for i in range(len(idx)-1)]
 
-    f = []
-    for i, a in enumerate(audio):
-        f.append([])
-        chapters = grouped[i]
-        for i, c in enumerate(chapters):
-            offset = float(a.chapters[i].start)
-            lines = [line.offset(offset) for chunk in c for line in chunk.segments]
-            f[-1].extend(lines)
-
-    for i, segments in enumerate(f):
-        out = output_dir / (audio[i].path.stem + '.' + output_format)
-        with out.open("w", encoding='utf8') as o:
-            o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
-
-    exit(0)
-
-    # transcribed_audio = []
-    # for i, a in enumerate(audio):
-    #     cf = []
-    #     for j, c in enumerate(a.chapters):
-    #         t = cache.get(a.path.name, c.id) if (i, j) in in_cache else cache.put(a.path.name, c.id, faster_transcribe(model, a, j, **model_args))
-    #         cf.append(TranscribedAudioStream.from_map(c, t))
-    #     transcribed_audio.append(TranscribedAudioFile(file=a, chapters=cf))
-    print(f"Transcribing took: {time.monotonic()-s:.2f}s")
-
-    aligner = calign.Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
-
+    aligner = Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
     print('Fuzzy matching chapters...')
-    ats, sta = match_start(aligner, transcribed_audio, text, prepend_punctuations, append_punctuations, nopend_punctuations)
-    audio_batches = expand_matches(transcribed_audio, text, ats, sta)
+    ats, sta = match_start(aligner, transcription_grouped, text, prepend_punctuations, append_punctuations, nopend_punctuations)
+    audio_batches = expand_matches(audio, text, ats, sta)
     print_batches(audio_batches, audio, text)
 
     print('Syncing...')
@@ -261,12 +204,13 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
                 continue
 
             bar.set_description(audio[ai].path.name)
-            offset, segments = sum(audio[ai].chapters[i].duration for i in range(0, batches[0][0])), []
+            segments = []
             for astart, aend, book, tstart, tend, _ in tqdm(batches):
-                ach = [(transcribed_audio[ai].chapters[i], audio[ai].chapters[i].duration) for i in range(astart, aend)]
-                tch = [text[book].chapters[i] for i in range(tstart, tend)]
-                segments.extend(do_batch(aligner, ach, tch, prepend_punctuations, append_punctuations, nopend_punctuations, offset))
-                offset += sum(a[1] for a in ach)
+                language = get_lang(ach[0][0].language, prepend, append, nopend)
+                tcontent = [s for i in range(tstart, tend) for s in text[book].chapters[i].text()]
+                acontent = [s for i in range(astart, aend) for s in transcription_grouped[ai][i].segments]
+                alignment, references = align.align(aligner, language, acontent, tcontent, [], set(), set(), set())
+                segments.extend(to_subs(tcontent, acontent, alignment))
 
             if not segments:
                 continue

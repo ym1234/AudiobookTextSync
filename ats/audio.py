@@ -3,10 +3,12 @@ import json
 import mimetypes
 import numpy as np
 
-from subprocess import Popen, PIPE, run, CalledProcessError
+from subprocess import Popen, PIPE, DEVNULL, run, CalledProcessError
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from tqdm.auto import tqdm
+import time
 
 SAMPLE_RATE = 16000
 N_FFT = 400
@@ -77,7 +79,7 @@ def read_full(pipe, buffer, offset):
     return nread, end
 
 class MelProcess:
-    def __init__(self, stream, chapter, n_mels=80, num_chunks=40):
+    def __init__(self, stream, chapter, n_mels=80, num_chunks=60): # 120 on the gpu
         self.cmd = [
             "ffmpeg",
             "-nostdin",
@@ -93,29 +95,30 @@ class MelProcess:
             "-"
         ]
 
-        self.title = stream.title + "/" + chapter.title
+        self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
+        self.offset = chapter.start
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
 
     def generator(self):
         buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
-        process = Popen(self.cmd, bufsize=2*buffer.nbytes, stdout=PIPE, stderr=PIPE)
+        process = Popen(self.cmd, bufsize=2*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
 
         nread, end = read_full(process.stdout, buffer, N_FFT//2)
         buffer[:N_FFT//2] = buffer[N_FFT//2:N_FFT][::-1] # reflect
         lmax = -np.inf
         while not end:
-            mel, lmax = self._mel(buffer, lmax)
+            mel, lmax = self.cpu_mel(buffer, lmax)
             yield mel
             buffer[:N_FFT - HOP_LENGTH] = buffer[-N_FFT+HOP_LENGTH:]
             nread, end = read_full(process.stdout, buffer, N_FFT - HOP_LENGTH)
 
         leftover = N_FFT - nread % N_FFT
         buffer[nread:nread+leftover] = buffer[nread-leftover:nread][::-1]
-        yield self._mel(buffer[:nread+leftover], lmax)[0][:, :-1]
+        yield self.cpu_mel(buffer[:nread+leftover], lmax)[0][:, :-1]
 
-    def _mel(self, buffer, lmax):
+    def cpu_mel(self, buffer, lmax): # GPU mel?
         chunks = np.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
 
         stft = np.fft.fft(chunks*self.window).T[:(N_FFT >> 1) + 1]
@@ -175,7 +178,7 @@ class AudioFile:
         title = info.get('format', {}).get('tags', {}).get('title', path.name)
         duration = float(info['duration'] if 'duration' in info else info['format']['duration'])
         chapters = [Chapter(id=c['id'], title=c.get('tags', {}).get('title', ''), start=float(c['start_time']), end=float(c['end_time']))
-                    for c in info['chapters']] or [Chapter(id=0, title="0", start=0, end=duration)]
+                    for c in info['chapters']] or [Chapter(id=0, title=title, start=0, end=duration)]
         streams  = [Stream(idx=s['index'], duration=s.get('duration', duration),
                            language=s['tags'].get('language', ''), default=bool(s['disposition']['default']), path=path, title=title)
                     for s in info['streams']]
@@ -190,17 +193,3 @@ class AudioFile:
                 t, _ = mimetypes.guess_type(f)
                 if p.suffix != ".ass" and t is not None and t.split('/', 1)[0] in mt:
                     yield cls.from_file(p/f)
-
-# @dataclass(eq=True, frozen=True)
-# class TranscribedAudioStream:
-#     stream: AudioStream
-#     language: str
-#     segments: list
-
-#     @classmethod
-#     def from_map(cls, stream, transcript): return cls(stream=stream, language=transcript['language'], segments=transcript['segments'])
-
-# @dataclass(eq=True, frozen=True)
-# class TranscribedAudioFile:
-#     file: AudioFile
-#     chapters: list[TranscribedAudioStream]

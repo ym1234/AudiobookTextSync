@@ -39,8 +39,6 @@ def _import_c2():
         pass
     return c2ext.Whisper, c2ext.WhisperGenerationResult, c2ext.get_cuda_device_count, c2ext.get_supported_compute_types, c2ext.StorageView
 Whisper, WhisperGenerationResult, get_cuda_device_count, get_supported_compute_types, StorageView, = _import_c2()
-# import ctranslate2
-# Whisper, WhisperGenerationResult, get_cuda_device_count, get_supported_compute_types, StorageView = ctranslate2.models.Whisper, ctranslate2.models.WhisperGenerationResult, ctranslate2.get_cuda_device_count, ctranslate2.get_supported_compute_types, ctranslate2.StorageView
 
 _MODELS = {
     "tiny.en": "Systran/faster-whisper-tiny.en",
@@ -150,22 +148,29 @@ class Tokenizer:
 class Chunk:
     start: int # in mel frames
     end: int
+    sidx: int
+    eidx: int
     temperature: float
     avg_logprob: float
     nospeech_prob: float
     tokens: list # idk if i care about this
-    segments: SubLine # start, end in relative to the mel reader or something?
+
+@dataclass
+class Transcript:
+    language: str
+    chunks: [Chunk]
+    segments: [SubLine]
 
 @dataclass
 class _TranscriptionState:
     idx: int
     stream: Generator[np.array, None, None]
     buffer: np.array
-    result: list
+    lines: list
+    chunks: list
     seek: int
     bar: tqdm
     language: int
-    sidx: int
 
 class Model:
     def __init__(self, model_size_or_path, device='auto', device_index=None, quantize=True, download_root=None, local_files_only=False):
@@ -173,7 +178,6 @@ class Model:
         num_cuda = get_cuda_device_count()
         device = 'cpu' if  num_cuda == 0 else device
         device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
-        # print(device_index)
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
                              # tensor_parallel=isinstance(device_index, list) and len(device_index) > 1)
                              # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
@@ -232,19 +236,16 @@ class Model:
         assert len(streams) == len(languages)
 
         batch_size = min(len(streams), batch_size)
-        main_bar = tqdm(total=len(streams), desc="Total progress", position=0, leave=True)
+        main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
         results = [None for _ in range(len(streams))]
         streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration, reverse=True)
         pending = batch_size
         active = []
         for i in range(batch_size):
             idx = streams_sorted[i]
-            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title, leave=True)
+            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
             generator = streams[idx].generator()
-            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), result=[], seek=0, bar=bar, language=languages[idx], sidx=0))
-
-        for k in active:
-            k.bar.unpause()
+            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx]))
 
         while len(active):
             padded = [np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, 3000 - a.buffer.shape[-1]))])
@@ -269,18 +270,17 @@ class Model:
                         seek = segments[-1][-1] - self.tokenizer.timestamp_begin
                         segments = segments[:-1]
 
-                lines = [SubLine(idx=a.sidx+i,
-                                 content=self.tokenizer.decode(s[1:-1]),
-                                 start=(a.seek+s[0]-self.tokenizer.timestamp_begin)*0.02,
-                                 end=(a.seek+s[-1]-self.tokenizer.timestamp_begin)*0.02)
-                         for i, s in enumerate(segments)]
-                a.sidx += len(segments)
+                lines = [SubLine(content=self.tokenizer.decode(s[1:-1]),
+                                 start=streams[a.idx].offset + (a.seek+s[0]-self.tokenizer.timestamp_begin)*0.02,
+                                 end=streams[a.idx].offset + (a.seek+s[-1]-self.tokenizer.timestamp_begin)*0.02)
+                         for s in segments]
 
                 nc = Chunk(start=a.seek*2, end=a.seek*2+seek*2,
-                           segments=lines, temperature=temperature,
-                           nospeech_prob=no_speech, avg_logprob=score/(len(tokens)+1),
-                           tokens=tokens)
-                a.result.append(nc)
+                           sidx=len(a.lines), eidx=len(a.lines)+len(lines),
+                           temperature=temperature, nospeech_prob=no_speech,
+                           avg_logprob=score/(len(tokens)+1), tokens=tokens)
+                a.lines.extend(lines)
+                a.chunks.append(nc)
                 a.seek += seek
 
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
@@ -289,24 +289,23 @@ class Model:
                     try:
                         a.buffer = np.concatenate((a.buffer, next(a.stream)), axis=-1)
                     except StopIteration:
-                        pass # If I put the rest here the indentation gets kinda deep
+                        pass
                     if a.buffer.shape[-1] == 0:
-                        results[a.idx] = a.result
+                        results[a.idx] = Transcript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
                         a.bar.close()
                         main_bar.update(1)
                         if pending < len(streams):
                             idx = streams_sorted[pending]
-                            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title, leave=True)
+                            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
                             generator = streams[idx].generator()
                             active[i] = _TranscriptionState(idx=idx, stream=generator,
                                                             buffer=next(generator), seek=0, bar=bar,
-                                                            result=[], language=languages[idx], sidx=0)
+                                                            lines=[], chunks=[], language=languages[idx])
                             pending += 1
                         else:
                             active.pop(i)
                             rs.pop(i)
                             i -= 1
                 i += 1
-                a.bar.refresh()
         return results
 

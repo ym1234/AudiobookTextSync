@@ -74,7 +74,7 @@ def fix(lang, original, edited, segments):
                 continue
             if to == 0:
                 continue
-            o, e = lang.translate(original[t]), edited[t]
+            o, e = lang.translate(original[t].text()), edited[t]
             oi = 0
             for ei in range(len(e)):
                 while oi < len(o) and e[ei] != o[oi]:
@@ -88,12 +88,12 @@ def fix(lang, original, edited, segments):
 
 
 # This is structured like this to deal with references later
-def align(model, aligner, lang, transcript, text, references, prepend, append, nopend):
-    transcript_clean = [lang.clean(i) for i in transcript]
+def align(aligner, lang, transcript, text, references, prepend, append, nopend):
+    transcript_clean = [lang.clean(i.text()) for i in transcript]
     transcript_joined = ''.join(transcript_clean)
 
     def inner(text):
-        text_clean = [lang.clean(i) for i in text]
+        text_clean = [lang.clean(i.text()) for i in text]
         text_joined = ''.join(text_clean)
 
         if not len(text_joined) or not len(transcript_joined): return []
