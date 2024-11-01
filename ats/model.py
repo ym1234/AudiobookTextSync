@@ -248,7 +248,7 @@ class Model:
             active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx]))
 
         while len(active):
-            padded = [streams[a.idx].np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, 3000 - a.buffer.shape[-1]))])
+            padded = [streams[a.idx].np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
                       for a in active]
             encoded = self.encode(streams[0].np.stack(padded), streams[0].np)
 
