@@ -164,8 +164,8 @@ class Transcript:
 @dataclass
 class _TranscriptionState:
     idx: int
-    stream: Generator[np.array, None, None]
-    buffer: np.array
+    stream: Generator[any, None, None]
+    buffer: any
     lines: list
     chunks: list
     seek: int
