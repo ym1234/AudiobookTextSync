@@ -105,7 +105,7 @@ class MelProcess:
         gpu = gpu and has_cupy
         self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
         self.offset = chapter.start
-        self.mel = self.cpu_mel if gpu else self.gpu_mel
+        self.mel = self.gpu_mel if gpu else self.cpu_mel
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
