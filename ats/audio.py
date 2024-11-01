@@ -86,7 +86,7 @@ def read_full(pipe, buffer, offset):
     return nread, end
 
 class MelProcess:
-    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=60): # 120 on the gpu
+    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=30): # 120 on the gpu
         self.cmd = [
             "ffmpeg",
             "-nostdin",
@@ -142,7 +142,7 @@ class MelProcess:
 
         lmax = max(lmax, log_spec.max())
         log_spec = cp.maximum(log_spec, lmax - 8.0)
-        return (log_spec + 4) / 4, lmax
+        return ((log_spec + 4) / 4).get(), lmax
 
     def cpu_mel(self, buffer, lmax): # GPU mel?
         chunks = np.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
