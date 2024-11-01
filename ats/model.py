@@ -190,10 +190,10 @@ class Model:
     @property
     def n_mels(self): return self.model.n_mels
 
-    def encode(self, features):
+    def encode(self, features, mod):
         to_cpu = self.model.device == "cuda" and len(self.model.device_index) > 1
-        features = np.ascontiguousarray(features)
-        features = StorageView.from_array(features.astype(np.float32))
+        features = mod.ascontiguousarray(features)
+        features = StorageView.from_array(features.astype(mod.float32))
         return self.model.encode(features, to_cpu=to_cpu)
 
     def generate_with_fallback(self, encoded, languages, temperatures, beam_size, patience, num_hypotheses, length_penalty,
@@ -248,9 +248,9 @@ class Model:
             active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx]))
 
         while len(active):
-            padded = [np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, 3000 - a.buffer.shape[-1]))])
+            padded = [streams[a.idx].np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, 3000 - a.buffer.shape[-1]))])
                       for a in active]
-            encoded = self.encode(np.stack(padded))
+            encoded = self.encode(streams[0].np.stack(padded), streams[0].np)
 
             if any(a.language is None for a in active):
                 r = self.model.detect_language(encoded)
@@ -287,7 +287,7 @@ class Model:
                 a.buffer = a.buffer[:, 2*seek:]
                 if a.buffer.shape[-1] < 3000:
                     try:
-                        a.buffer = np.concatenate((a.buffer, next(a.stream)), axis=-1)
+                        a.buffer = streams[a.idx].np.concatenate((a.buffer, next(a.stream)), axis=-1)
                     except StopIteration:
                         pass
                     if a.buffer.shape[-1] == 0:

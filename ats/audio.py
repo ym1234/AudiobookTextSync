@@ -86,7 +86,7 @@ def read_full(pipe, buffer, offset):
     return nread, end
 
 class MelProcess:
-    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=30): # 120 on the gpu
+    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=60):
         self.cmd = [
             "ffmpeg",
             "-nostdin",
@@ -102,14 +102,15 @@ class MelProcess:
             "-"
         ]
 
-        gpu = gpu and has_cupy
+        self.gpu = gpu and has_cupy
         self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
         self.offset = chapter.start
-        self.mel = self.gpu_mel if gpu else self.cpu_mel
+        self.mel = self.gpu_mel if self.gpu else self.cpu_mel
+        self.np = cp if self.gpu else np
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
-        if gpu:
+        if self.gpu:
             self.filters, self.window = cp.asarray(self.filters), cp.asarray(self.window)
 
     def generator(self):
@@ -141,7 +142,7 @@ class MelProcess:
         log_spec = cp.maximum(log_spec, lmax - 8.0)
         return ((log_spec + 4) / 4).get(), lmax
 
-    def cpu_mel(self, buffer, lmax): # GPU mel?
+    def cpu_mel(self, buffer, lmax):
         chunks = np.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
 
         stft = np.fft.fft(chunks*self.window).T[:(N_FFT >> 1) + 1]
