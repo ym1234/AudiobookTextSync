@@ -188,7 +188,8 @@ class AudioFile:
     def from_dir(cls, path):
         if not path.exists(): raise FileNotFoundError(f"{str(path)} doesn't exist")
         mt = {'video', 'audio'}
-        for _, _, files in os.walk(str(path)): # TODO path.walk is python3.12
+        for p, _, files in os.walk(str(path)): # TODO path.walk is python3.12
+            p = Path(p)
             for f in files:
                 t, _ = mimetypes.guess_type(f)
                 if p.suffix != ".ass" and t is not None and t.split('/', 1)[0] in mt:
