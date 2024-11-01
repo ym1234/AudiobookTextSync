@@ -2,6 +2,12 @@ import os
 import json
 import mimetypes
 import numpy as np
+try:
+    import cupy as cp
+    has_cupy = True
+except ImportError:
+    has_cupy = False
+    pass
 
 from subprocess import Popen, PIPE, DEVNULL, run, CalledProcessError
 from dataclasses import dataclass
@@ -79,7 +85,7 @@ def read_full(pipe, buffer, offset):
     return nread, end
 
 class MelProcess:
-    def __init__(self, stream, chapter, n_mels=80, num_chunks=60): # 120 on the gpu
+    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=60): # 120 on the gpu
         self.cmd = [
             "ffmpeg",
             "-nostdin",
@@ -97,6 +103,7 @@ class MelProcess:
 
         self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
         self.offset = chapter.start
+        self.mel = self.cpu_mel if not gpu or not has_cupy else self.gpu_mel
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)

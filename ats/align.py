@@ -70,7 +70,7 @@ def fix(lang, original, edited, segments):
         for i in range(2):
             t, to = s[i] - i, s[i+2]
             if to == -1:
-                s[i+2] = 2*len(original[t]) # hack lol
+                s[i+2] = 2*len(original[t].text()) # hack lol
                 continue
             if to == 0:
                 continue
