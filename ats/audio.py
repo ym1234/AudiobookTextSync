@@ -131,9 +131,7 @@ class MelProcess:
 
     def gpu_mel(self, buffer, lmax):
         buffer = cp.asarray(buffer)
-        chunks = cp.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
-
-        _, _, stft = signal.stft(chunks, fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)
+        _, _, stft = signal.stft(buffer, fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)
         stft = stft.reshape(stft.shape[0], -1).T[:(N_FFT >> 1) + 1]
         magnitudes = cp.abs(stft) ** 2
 
