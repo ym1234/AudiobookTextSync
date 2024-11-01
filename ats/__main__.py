@@ -182,7 +182,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
     streams, idx = [], [0]
     for a in audio:
         s = [s for s in a.streams if s.default][0] # TODO based on language etc
-        streams.extend([MelProcess(stream=s, chapter=c, n_mels=model.n_mels) for c in a.chapters])
+        streams.extend([MelProcess(stream=s, chapter=c, gpu=model.device == 'cuda', n_mels=model.n_mels) for c in a.chapters])
         idx.append(idx[-1] + len(a.chapters))
 
     transcription = model.transcribe(streams, batch_size, language=language, **model_args)

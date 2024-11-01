@@ -4,6 +4,7 @@ import mimetypes
 import numpy as np
 try:
     import cupy as cp
+    from import cupyx.scipy import signal
     has_cupy = True
 except ImportError:
     has_cupy = False
@@ -101,12 +102,15 @@ class MelProcess:
             "-"
         ]
 
+        gpu = gpu and has_cupy
         self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
         self.offset = chapter.start
-        self.mel = self.cpu_mel if not gpu or not has_cupy else self.gpu_mel
+        self.mel = self.cpu_mel if gpu else self.gpu_mel
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
+        if gpu:
+            self.filters, self.window = cp.asarray(self.filters), cp.asarray(self.window)
 
     def generator(self):
         buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
@@ -116,14 +120,29 @@ class MelProcess:
         buffer[:N_FFT//2] = buffer[N_FFT//2:N_FFT][::-1] # reflect
         lmax = -np.inf
         while not end:
-            mel, lmax = self.cpu_mel(buffer, lmax)
+            mel, lmax = self.mel(buffer, lmax)
             yield mel
             buffer[:N_FFT - HOP_LENGTH] = buffer[-N_FFT+HOP_LENGTH:]
             nread, end = read_full(process.stdout, buffer, N_FFT - HOP_LENGTH)
 
         leftover = N_FFT - nread % N_FFT
         buffer[nread:nread+leftover] = buffer[nread-leftover:nread][::-1]
-        yield self.cpu_mel(buffer[:nread+leftover], lmax)[0][:, :-1]
+        yield self.mel(buffer[:nread+leftover], lmax)[0][:, :-1]
+
+    def gpu_mel(self, buffer. lmax):
+        buffer = cp.asarray(buffer)
+        chunks = cp.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
+
+        stft = signal.stft(chunks, fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)
+        stft = stft[-1].reshape(stft.shape[0], -1).T[:(N_FFT >> 1) + 1]
+        magnitudes = cp.abs(stft) ** 2
+
+        mel_spec = self.filters @ magnitudes
+        log_spec = cp.log10(cp.clip(mel_spec, a_min=1e-10, a_max=None))
+
+        lmax = max(lmax, log_spec.max())
+        log_spec = cp.maximum(log_spec, lmax - 8.0)
+        return (log_spec + 4) / 4, lmax
 
     def cpu_mel(self, buffer, lmax): # GPU mel?
         chunks = np.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
