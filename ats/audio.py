@@ -115,7 +115,7 @@ class MelProcess:
 
     def generator(self):
         buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
-        process = Popen(self.cmd, bufsize=2*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
+        process = Popen(self.cmd, bufsize=4*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
 
         nread, end = read_full(process.stdout, buffer, N_FFT//2)
         buffer[:N_FFT//2] = buffer[N_FFT//2:N_FFT][::-1] # reflect
