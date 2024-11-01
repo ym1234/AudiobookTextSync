@@ -4,7 +4,7 @@ import mimetypes
 import numpy as np
 try:
     import cupy as cp
-    from import cupyx.scipy import signal
+    from cupyx.scipy import signal
     has_cupy = True
 except ImportError:
     has_cupy = False
