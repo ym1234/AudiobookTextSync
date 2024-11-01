@@ -130,9 +130,8 @@ class MelProcess:
         yield self.mel(buffer[:nread+leftover], lmax)[0][:, :-1]
 
     def gpu_mel(self, buffer, lmax):
-        buffer = cp.asarray(buffer)
-        _, _, stft = signal.stft(buffer, fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)
-        stft = stft.reshape(stft.shape[0], -1).T[:(N_FFT >> 1) + 1]
+        stft = signal.stft(cp.asarray(buffer), fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)[0]
+        stft = stft[:(N_FFT >> 1) + 1: , -1]
         magnitudes = cp.abs(stft) ** 2
 
         mel_spec = self.filters @ magnitudes
