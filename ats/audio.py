@@ -117,7 +117,9 @@ class MelProcess:
         buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
         process = Popen(self.cmd, bufsize=4*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
 
+        s = time.monotonic()
         nread, end = read_full(process.stdout, buffer, N_FFT//2)
+        tqdm.write(f"reading took {time.monotonic()-s}s")
         buffer[:N_FFT//2] = buffer[N_FFT//2:N_FFT][::-1] # reflect
         lmax = -np.inf
         while not end:
