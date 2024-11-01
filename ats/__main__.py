@@ -206,7 +206,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             bar.set_description(audio[ai].path.name)
             segments = []
             for astart, aend, book, tstart, tend, _ in tqdm(batches):
-                language = get_lang(transcription_grouped[ai][astart]].language, prepend, append, nopend)
+                language = get_lang(transcription_grouped[ai][astart].language, prepend, append, nopend)
                 tcontent = [s for i in range(tstart, tend) for s in text[book].chapters[i].text()]
                 acontent = [s for i in range(astart, aend) for s in transcription_grouped[ai][i].segments]
                 alignment, references = align.align(aligner, language, acontent, tcontent, [], set(), set(), set())
