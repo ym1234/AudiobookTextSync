@@ -129,7 +129,7 @@ class MelProcess:
         buffer[nread:nread+leftover] = buffer[nread-leftover:nread][::-1]
         yield self.mel(buffer[:nread+leftover], lmax)[0][:, :-1]
 
-    def gpu_mel(self, buffer. lmax):
+    def gpu_mel(self, buffer, lmax):
         buffer = cp.asarray(buffer)
         chunks = cp.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
 
