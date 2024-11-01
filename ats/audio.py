@@ -140,7 +140,7 @@ class MelProcess:
 
         lmax = max(lmax, log_spec.max())
         log_spec = cp.maximum(log_spec, lmax - 8.0)
-        return ((log_spec + 4) / 4).get(), lmax
+        return (log_spec + 4) / 4, lmax
 
     def cpu_mel(self, buffer, lmax):
         chunks = np.stack([buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)][:-2])
