@@ -104,7 +104,7 @@ def decoder(container, stream, num_samples, end, q):
     q.put((buf, True))
 
 class MelProcess:
-    def __init__(self, stream, chapter, gpu=False, n_mels=40, num_chunks=10):
+    def __init__(self, stream, chapter, gpu=False, n_mels=40, num_chunks=50):
         # self.cmd = [
         #     "ffmpeg",
         #     "-nostdin",
