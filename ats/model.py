@@ -238,7 +238,7 @@ class Model:
         batch_size = min(len(streams), batch_size)
         main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
         results = [None for _ in range(len(streams))]
-        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration, reverse=True)
+        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration), reverse=True)
         pending = batch_size
         active = []
         for i in range(batch_size):
@@ -284,6 +284,7 @@ class Model:
                 a.seek += seek
 
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
+                # a.bar.update(seek*0.02)
                 a.buffer = a.buffer[:, 2*seek:]
                 if a.buffer.shape[-1] < 3000:
                     try:

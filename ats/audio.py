@@ -16,6 +16,9 @@ from functools import cache
 from pathlib import Path
 from tqdm.auto import tqdm
 import time
+import av
+from threading import Thread
+from queue import Queue
 
 SAMPLE_RATE = 16000
 N_FFT = 400
@@ -74,39 +77,60 @@ def mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=80):
     return weights, np.hanning(N_FFT + 1)[:-1].astype(np.float32)
 
 
-def read_full(pipe, buffer, offset):
-    nread, end = offset, False
-    while nread < len(buffer):
-        bread = pipe.readinto(buffer[nread:])
-        if bread == 0: # I think this is correct?
-            end = True
+# def read_full(pipe, buffer, offset):
+#     nread, end = offset, False
+#     while nread < len(buffer):
+#         bread = pipe.readinto(buffer[nread:])
+#         if bread == 0: # I think this is correct?
+#             end = True
+#             break
+#         bread //= 4
+#         nread += bread
+#     return nread, end
+
+def decoder(container, stream, num_samples, end, q):
+    fifo = av.audio.fifo.AudioFifo()
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
+    for frame in container.decode(stream):
+        for re in resampler.resample(frame):
+            re.pts = None
+            fifo.write(re)
+        if frame.time >= end:
             break
-        bread //= 4
-        nread += bread
-    return nread, end
+        if fifo.samples >= num_samples:
+            buf = fifo.read(samples=num_samples).to_ndarray().reshape(-1).astype(np.float32) / 32768.0
+            q.put((buf, False))
+    buf = fifo.read().to_ndarray().reshape(-1).astype(np.float32) / 32768.0
+    q.put((buf, True))
 
 class MelProcess:
-    def __init__(self, stream, chapter, gpu=False, n_mels=80, num_chunks=60):
-        self.cmd = [
-            "ffmpeg",
-            "-nostdin",
-            "-threads", "0",
-            '-ss', str(chapter.start),
-            '-to', str(chapter.end),
-            "-i",  str(stream.path),
-            "-f", "f32le",
-            "-ac", "1",
-            "-acodec", "pcm_f32le",
-            "-ar", str(SAMPLE_RATE),
-            "-map", f"0:{stream.idx}",
-            "-"
-        ]
+    def __init__(self, stream, chapter, gpu=False, n_mels=40, num_chunks=10):
+        # self.cmd = [
+        #     "ffmpeg",
+        #     "-nostdin",
+        #     "-threads", "0",
+        #     '-ss', str(chapter.start),
+        #     '-to', str(chapter.end),
+        #     "-i",  str(stream.path),
+        #     "-f", "f32le",
+        #     "-ac", "1",
+        #     "-acodec", "pcm_f32le",
+        #     "-ar", str(SAMPLE_RATE),
+        #     "-map", f"0:{stream.idx}",
+        #     "-"
+        # ]
 
+        self.container = av.open(stream.path)
+        self.stream = self.container.streams.get(stream.idx)[0]
+        self.container.seek(int(int(chapter.start)/self.stream.time_base), stream=self.stream)
+        # print(self.stream.time_base)
+        # print("HERE")
         self.gpu = gpu and has_cupy
         self.title = stream.title + ("/" + chapter.title if stream.title != chapter.title else '')
         self.offset = chapter.start
         self.mel = self.gpu_mel if self.gpu else self.cpu_mel
         self.np = cp if self.gpu else np
+        self.end = chapter.end
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
@@ -114,23 +138,36 @@ class MelProcess:
             self.filters, self.window = cp.asarray(self.filters), cp.asarray(self.window)
 
     def generator(self):
-        buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
-        process = Popen(self.cmd, bufsize=4*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
+        # buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
+
+        reader = Queue(maxsize=1)
+        thread = Thread(target=decoder, args=(self.container, self.stream, self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, self.end, reader))
+        thread.start()
+        # process = Popen(self.cmd, bufsize=5*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
 
         s = time.monotonic()
-        nread, end = read_full(process.stdout, buffer, N_FFT//2)
-        tqdm.write(f"reading took {time.monotonic()-s}s")
-        buffer[:N_FFT//2] = buffer[N_FFT//2:N_FFT][::-1] # reflect
+        # nread, end = read_full(process.stdout, buffer, N_FFT//2)
+        # nread, leftover, end = read_full(reader, buffer, np.array([]), N_FFT//2)
+        buffer, end = reader.get()
+        buffer = np.pad(buffer, (N_FFT//2, 0), mode='reflect')
+        tqdm.write(f"reading took {time.monotonic()-s}s, end: {end}")
         lmax = -np.inf
+
         while not end:
             mel, lmax = self.mel(buffer, lmax)
             yield mel
-            buffer[:N_FFT - HOP_LENGTH] = buffer[-N_FFT+HOP_LENGTH:]
-            nread, end = read_full(process.stdout, buffer, N_FFT - HOP_LENGTH)
+            saved = buffer[-N_FFT+HOP_LENGTH:]
+            s = time.monotonic()
+            buffer, end = reader.get()#read_full(process.stdout, buffer, leftover, N_FFT - HOP_LENGTH)
+            buffer = np.concatenate([saved, buffer])
+            tqdm.write(f"reading took {time.monotonic()-s}s, end: {end}")
 
-        leftover = N_FFT - nread % N_FFT
-        buffer[nread:nread+leftover] = buffer[nread-leftover:nread][::-1]
-        yield self.mel(buffer[:nread+leftover], lmax)[0][:, :-1]
+        leftover = N_FFT - len(buffer) % N_FFT
+        if leftover > len(buffer):
+            buffer = np.pad(buffer, (0, len(buffer)-leftover))
+        buffer = np.pad(buffer, (0, leftover), mode='reflect')
+        thread.join()
+        yield self.mel(buffer, lmax)[0][:, :-1]
 
     def gpu_mel(self, buffer, lmax):
         stft = signal.stft(cp.asarray(buffer), fs=SAMPLE_RATE, window='hann', nperseg=N_FFT, noverlap=N_FFT-HOP_LENGTH, nfft=N_FFT, return_onesided=False)[-1]

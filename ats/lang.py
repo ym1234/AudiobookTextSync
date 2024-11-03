@@ -33,8 +33,8 @@ class Japanese(Language):
 
     def clean(self, s):
         s = self.translate(s)
-        s = self.r1.sub('', s)
-        s = self.r2.sub('', s)
+        # s = self.r1.sub('', s)
+        # s = self.r2.sub('', s)
         return s
         # return self.r3.sub('', self.r2.sub('', s))
 
