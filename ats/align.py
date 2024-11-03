@@ -103,7 +103,7 @@ def align(aligner, lang, transcript, text, references, prepend, append, nopend):
         segments = align_sub(coords[0], coords[1], np.cumsum([0]+[len(x) for x in text_clean]), np.cumsum([len(x) for x in transcript_clean]))
         del coords
 
-        fix(lang, text, text_clean, segments)
+        # fix(lang, text, text_clean, segments)
         # fix_punc(text, segments, prepend, append, nopend)
         return segments
 

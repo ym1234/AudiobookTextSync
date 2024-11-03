@@ -239,7 +239,7 @@ class Model:
         batch_size = min(len(streams), batch_size)
         main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
         results = [None for _ in range(len(streams))]
-        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration)#, reverse=True)
+        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration, reverse=True)
         pending_activation = batch_size
         pending = batch_size
         active = []
