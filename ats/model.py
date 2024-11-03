@@ -246,6 +246,9 @@ class Model:
         active = []
         for i in range(batch_size):
             idx = streams_sorted[i]
+            streams[idx].start()
+        for i in range(batch_size):
+            idx = streams_sorted[i]
             bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
             generator = streams[idx].generator()
             active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx], dispatched=False))
@@ -302,6 +305,7 @@ class Model:
                     if a.buffer.shape[-1] == 0:
                         results[a.idx] = Transcript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
                         a.bar.close()
+                        streams[a.idx].thread.join()
                         main_bar.update(1)
                         if pending < len(streams):
                             idx = streams_sorted[pending]
