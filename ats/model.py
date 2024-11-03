@@ -170,6 +170,7 @@ class _TranscriptionState:
     chunks: list
     seek: int
     bar: tqdm
+    dispatched: bool
     language: int
 
 class Model:
@@ -238,14 +239,15 @@ class Model:
         batch_size = min(len(streams), batch_size)
         main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
         results = [None for _ in range(len(streams))]
-        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration, reverse=True)
+        streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration)#, reverse=True)
+        pending_activation = batch_size
         pending = batch_size
         active = []
         for i in range(batch_size):
             idx = streams_sorted[i]
             bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
             generator = streams[idx].generator()
-            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx]))
+            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx], dispatched=False))
 
         while len(active):
             padded = [streams[a.idx].np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))], mode='constant', constant_values=((0, 0), (0, 0)))
@@ -284,6 +286,11 @@ class Model:
                 a.seek += seek
 
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
+                if not a.dispatched and a.bar.n/a.bar.total > 0.5 and pending_activation < len(streams):
+                    idx = streams_sorted[pending_activation]
+                    streams[idx].start()
+                    a.dispatched = True
+                    pending_activation += 1
                 # a.bar.update(seek*0.02)
                 a.buffer = a.buffer[:, 2*seek:]
                 if a.buffer.shape[-1] < 3000:
@@ -301,7 +308,7 @@ class Model:
                             generator = streams[idx].generator()
                             active[i] = _TranscriptionState(idx=idx, stream=generator,
                                                             buffer=next(generator), seek=0, bar=bar,
-                                                            lines=[], chunks=[], language=languages[idx])
+                                                            lines=[], chunks=[], language=languages[idx], dispatched=False)
                             pending += 1
                         else:
                             active.pop(i)

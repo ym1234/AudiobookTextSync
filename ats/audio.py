@@ -134,21 +134,27 @@ class MelProcess:
         self.duration = chapter.end - chapter.start
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
+        self.reader = Queue(maxsize=1)
+        self.thread = Thread(target=decoder, args=(self.container, self.stream, self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, self.end, self.reader))
+        self.started = False
         if self.gpu:
             self.filters, self.window = cp.asarray(self.filters), cp.asarray(self.window)
+
+    def start(self):
+        self.thread.start()
+        self.started = True
 
     def generator(self):
         # buffer = np.zeros(self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, dtype=F32LE)
 
-        reader = Queue(maxsize=1)
-        thread = Thread(target=decoder, args=(self.container, self.stream, self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, self.end, reader))
-        thread.start()
+        if not self.started:
+            self.thread.start()
         # process = Popen(self.cmd, bufsize=5*buffer.nbytes, stdout=PIPE, stderr=DEVNULL)
 
         s = time.monotonic()
         # nread, end = read_full(process.stdout, buffer, N_FFT//2)
         # nread, leftover, end = read_full(reader, buffer, np.array([]), N_FFT//2)
-        buffer, end = reader.get()
+        buffer, end = self.reader.get()
         buffer = np.pad(buffer, (N_FFT//2, 0), mode='reflect')
         tqdm.write(f"reading took {time.monotonic()-s}s, end: {end}")
         lmax = -np.inf
@@ -158,7 +164,7 @@ class MelProcess:
             yield mel
             saved = buffer[-N_FFT+HOP_LENGTH:]
             s = time.monotonic()
-            buffer, end = reader.get()#read_full(process.stdout, buffer, leftover, N_FFT - HOP_LENGTH)
+            buffer, end = self.reader.get()#read_full(process.stdout, buffer, leftover, N_FFT - HOP_LENGTH)
             buffer = np.concatenate([saved, buffer])
             tqdm.write(f"reading took {time.monotonic()-s}s, end: {end}")
 
@@ -166,7 +172,7 @@ class MelProcess:
         if leftover > len(buffer):
             buffer = np.pad(buffer, (0, len(buffer)-leftover))
         buffer = np.pad(buffer, (0, leftover), mode='reflect')
-        thread.join()
+        self.thread.join()
         yield self.mel(buffer, lmax)[0][:, :-1]
 
     def gpu_mel(self, buffer, lmax):
