@@ -305,7 +305,6 @@ class Model:
                     if a.buffer.shape[-1] == 0:
                         results[a.idx] = Transcript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
                         a.bar.close()
-                        streams[a.idx].thread.join()
                         main_bar.update(1)
                         if pending < len(streams):
                             idx = streams_sorted[pending]
