@@ -17,8 +17,9 @@ from pathlib import Path
 from tqdm.auto import tqdm
 import time
 import av
-from threading import Thread
-from queue import Queue
+# from threading import Thread
+# from queue import Queue
+from multiprocessing import Process, Queue
 
 SAMPLE_RATE = 16000
 N_FFT = 400
@@ -135,7 +136,7 @@ class MelProcess:
         self.num_chunks = num_chunks
         self.filters, self.window = mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=n_mels)
         self.reader = Queue(maxsize=1)
-        self.thread = Thread(target=decoder, args=(self.container, self.stream, self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, self.end, self.reader))
+        self.thread = Process(target=decoder, args=(self.container, self.stream, self.num_chunks*CHUNK_LENGTH*SAMPLE_RATE + N_FFT - HOP_LENGTH, self.end, self.reader))
         self.started = False
         if self.gpu:
             self.filters, self.window = cp.asarray(self.filters), cp.asarray(self.window)

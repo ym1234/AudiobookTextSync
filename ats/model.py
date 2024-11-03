@@ -286,7 +286,7 @@ class Model:
                 a.seek += seek
 
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
-                if not a.dispatched and a.bar.n/a.bar.total > 0.5 and pending_activation < len(streams):
+                if not a.dispatched and a.bar.n/a.bar.total > 0.3 and pending_activation < len(streams):
                     idx = streams_sorted[pending_activation]
                     streams[idx].start()
                     a.dispatched = True
