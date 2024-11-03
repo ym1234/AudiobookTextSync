@@ -211,6 +211,7 @@ class Model:
             decode_args = {"beam_size": beam_size, "patience": patience, "sampling_temperature": t}
             if i != 0:
                 decode_args['num_hypotheses'] = num_hypotheses
+                tqdm.write(f"DECODING FAILED!! {i}")
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):

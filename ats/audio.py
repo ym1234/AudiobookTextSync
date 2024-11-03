@@ -123,6 +123,7 @@ class MelProcess:
 
         self.container = av.open(stream.path)
         self.stream = self.container.streams.get(stream.idx)[0]
+        self.stream.thread_type = "AUTO"
         self.container.seek(int(int(chapter.start)/self.stream.time_base), stream=self.stream)
         # print(self.stream.time_base)
         # print("HERE")
