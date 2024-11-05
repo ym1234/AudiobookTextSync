@@ -98,8 +98,8 @@ def align(aligner, lang, transcript, text, references, prepend, append, nopend):
 
         if not len(text_joined) or not len(transcript_joined): return []
         score, coords = aligner.hirschberg(text_joined, transcript_joined)
-        score2 = aligner.similarity(text_joined, transcript_joined)
-        print(score, score2)
+        # score2 = aligner.similarity(text_joined, transcript_joined)
+        # print(score, score2)
         segments = align_sub(coords[0], coords[1], np.cumsum([0]+[len(x) for x in text_clean]), np.cumsum([len(x) for x in transcript_clean]))
         del coords
 
