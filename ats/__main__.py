@@ -2,7 +2,7 @@ from ats import align
 from ats.calign import Aligner
 from ats.lang import get_lang
 
-from ats.audio import AudioFile, MelProcess
+from ats.audio import Container
 from ats.text import TextFile, SubLine
 from ats.model import Model, available_models
 
@@ -166,8 +166,8 @@ def prompt(message, lchoices):
                 continue
         return r
 
-def transcribe():
-    pass
+def select_streams(audio):
+    return [a.streams[a.default_stream] for a in audio]
 
 def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             model, device, batch_size,
@@ -178,19 +178,12 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
     # TODO redo the cache
     model = Model(model, device, quantize=quantize, local_files_only=local_only)
     print(f"Using device: {model.device} with {model.compute_type} compute.")
-
-    streams, idx = [], [0]
-    for a in audio:
-        s = [s for s in a.streams if s.default][0] # TODO based on language etc
-        streams.extend([MelProcess(stream=s, chapter=c, gpu=model.device == 'cuda', n_mels=model.n_mels) for c in a.chapters])
-        idx.append(idx[-1] + len(a.chapters))
-
-    transcription = model.transcribe(streams, batch_size, language=language, **model_args)
-    transcription_grouped = [transcription[idx[i]:idx[i+1]] for i in range(len(idx)-1)]
+    transcription = model.transcribe(select_streams(audio), batch_size=batch_size, num_chunks=10,
+                                     language=language, use_stream_language=False, **model_args)
 
     aligner = Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
     print('Fuzzy matching chapters...')
-    ats, sta = match_start(aligner, transcription_grouped, text, prepend_punctuations, append_punctuations, nopend_punctuations)
+    ats, sta = match_start(aligner, transcription, text, prepend_punctuations, append_punctuations, nopend_punctuations)
     audio_batches = expand_matches(audio, text, ats, sta)
     print_batches(audio_batches, audio, text)
 
@@ -274,7 +267,7 @@ if __name__ == "__main__":
     language = args.pop('language')
 
     print("Loading...")
-    audio = list(chain.from_iterable([AudioFile.from_file(f)] if f.is_file() else AudioFile.from_dir(f) for f in args.pop('audio')))
+    audio = list(chain.from_iterable([Container.from_file(f)] if f.is_file() else Container.from_dir(f) for f in args.pop('audio')))
     text  = list(chain.from_iterable([TextFile.from_file(f)] if f.is_file() else TextFile.from_dir(f) for f in args.pop('text')))
 
     output_dir = args.pop('output_dir')

@@ -2,12 +2,13 @@ import os
 import multiprocessing
 import huggingface_hub
 import tokenizers
-import numpy as np
 from typing import Generator
 from dataclasses import dataclass
 from functools import cached_property
+from itertools import chain
 from ats.text import SubLine
-from pprint import pprint
+from ats.audio import Stream
+from ats import mel
 from tqdm.auto import tqdm
 
 # Stupid hack because python doesn't have lazy imports (torch)
@@ -156,7 +157,7 @@ class Chunk:
     tokens: list # idk if i care about this
 
 @dataclass
-class Transcript:
+class ChapterTranscript:
     language: str
     chunks: [Chunk]
     segments: [SubLine]
@@ -164,14 +165,19 @@ class Transcript:
 @dataclass
 class _TranscriptionState:
     idx: int
-    stream: Generator[any, None, None]
     buffer: any
     lines: list
     chunks: list
     seek: int
     bar: tqdm
-    dispatched: bool
     language: int
+    done: bool
+
+@dataclass
+class StreamTranscript:
+    stream: Stream
+    segments: [SubLine]
+    chapters: [ChapterTranscript]
 
 class Model:
     def __init__(self, model_size_or_path, device='auto', device_index=None, quantize=True, download_root=None, local_files_only=False):
@@ -180,9 +186,9 @@ class Model:
         device = 'cpu' if  num_cuda == 0 else device
         device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
-                             # tensor_parallel=isinstance(device_index, list) and len(device_index) > 1)
-                             # intra_threads=multiprocessing.cpu_count()) # I have no idea why this makes it **slower**
         self.tokenizer = Tokenizer(path=model_path)
+        self.mel_reader = mel.GPUMelReader if self.device == 'cuda' and mel.has_cupy else mel.CPUMelReader
+        self.np = mel.cp if self.device == 'cuda' and mel.has_cupy else mel.np # hacky
 
     @property
     def device(self): return self.model.device
@@ -191,10 +197,10 @@ class Model:
     @property
     def n_mels(self): return self.model.n_mels
 
-    def encode(self, features, mod):
+    def encode(self, features):
         to_cpu = self.model.device == "cuda" and len(self.model.device_index) > 1
-        features = mod.ascontiguousarray(features)
-        features = StorageView.from_array(features.astype(mod.float32))
+        features = self.np.ascontiguousarray(features)
+        features = StorageView.from_array(features.astype(self.np.float32))
         return self.model.encode(features, to_cpu=to_cpu)
 
     def generate_with_fallback(self, encoded, languages, temperatures, beam_size, patience, num_hypotheses, length_penalty,
@@ -211,7 +217,7 @@ class Model:
             decode_args = {"beam_size": beam_size, "patience": patience, "sampling_temperature": t}
             if i != 0:
                 decode_args['num_hypotheses'] = num_hypotheses
-                tqdm.write(f"DECODING FAILED!! {i}")
+                # tqdm.write(f"DECODING FAILED!! {i}")
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):
@@ -232,13 +238,24 @@ class Model:
         penalty = norm if length_penalty is None else gnmt
         return [sorted(c, key=penalty)[-1] if c else ([], -1, no_speech[i], -1) for c in cands]
 
-    def transcribe(self, streams, batch_size, language=None, **model_args):
-        languages = language if isinstance(language, list) else [language] * len(streams)
-        languages = [self.tokenizer.token_to_id("<|"+l+"|>") for l in languages] if language is not None else languages
-        assert len(streams) == len(languages)
+    def transcribe(self, streams, num_chunks, batch_size, language, use_stream_language=False, **model_args):
+        chapters = [self.mel_reader(s, c, n_mels=self.n_mels, num_chunks=num_chunks) for s in streams for c in s.parent.chapters]
+        if use_stream_language:
+            languages = [s.language if s.strip() else None for s in streams for _ in s.parent.chapters]
+        elif not isinstance(language, list):
+            languages = [language] * len(chapters)
+        languages = [self.tokenizer.token_to_id("<|"+l+"|>") if l is not None else None for l in languages]
+        assert len(chapters) == len(languages)
+        results = self._transcribe(chapters, batch_size, languages, **model_args)
 
-        batch_size = min(len(streams), batch_size)
+        idx = [0] + np.cumsum([len(s.parent.chapters) for s in streams], dtype=np.int).tolist()
+        grouped = [results[s:e] for s, e in zip(idx, idx[1:])]
+
+        return [StreamTranscript(stream=s, segments=list(chain([g.segments for g in grouped[i]])), chapters=grouped[i]) for i, s in enumerate(streams)]
+
+    def _transcribe(self, streams, batch_size, languages, **model_args):
         main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
+        batch_size = min(len(streams), batch_size)
         results = [None for _ in range(len(streams))]
         streams_sorted = sorted(range(len(streams)), key=lambda x: streams[x].duration, reverse=True)
         pending_activation = batch_size
@@ -247,16 +264,43 @@ class Model:
         for i in range(batch_size):
             idx = streams_sorted[i]
             streams[idx].start()
-        for i in range(batch_size):
-            idx = streams_sorted[i]
-            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
-            generator = streams[idx].generator()
-            active.append(_TranscriptionState(idx=idx, stream=generator, buffer=next(generator), lines=[], chunks=[], seek=0, bar=bar, language=languages[idx], dispatched=False))
+            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", desc=streams[idx].title)
+            active.append(_TranscriptionState(idx=idx, buffer=self.np.zeros((self.n_mels, 0)), lines=[], chunks=[],
+                                              seek=0, bar=bar, language=languages[idx], done=False))
 
         while len(active):
-            padded = [streams[a.idx].np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))], mode='constant', constant_values=((0, 0), (0, 0)))
+            i = 0
+            while i < len(active):
+                a = active[i]
+                if not a.done and a.buffer.shape[-1] < 3000:
+                    buf, end = streams[a.idx].queue.get()
+                    a.buffer = self.np.concatenate((a.buffer, buf), axis=-1)
+                    if end:
+                        if pending_activation < len(streams):
+                            streams[streams_sorted[pending_activation]].start()
+                            pending_activation += 1
+                        streams[a.idx].join()
+                        if streams[a.idx].stderr:
+                            tqdm.write(str(streams[a.idx].stderr))
+                        a.done = True
+                elif a.buffer.shape[-1] == 0:
+                    results[a.idx] = ChapterTranscript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
+                    a.bar.close()
+                    main_bar.update(1)
+                    if pending < len(streams):
+                        idx = streams_sorted[pending]
+                        bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", desc=streams[idx].title)
+                        active[i] = _TranscriptionState(idx=idx, buffer=self.np.zeros((self.n_mels, 0)), lines=[], chunks=[],
+                                                        seek=0, bar=bar, language=languages[idx], done=False)
+                        pending += 1
+                    else:
+                        active.pop(i)
+                    i -= 1
+                i += 1
+
+            padded = [self.np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
                       for a in active]
-            encoded = self.encode(streams[0].np.stack(padded), streams[0].np)
+            encoded = self.encode(self.np.stack(padded))
 
             if any(a.language is None for a in active):
                 r = self.model.detect_language(encoded)
@@ -264,9 +308,7 @@ class Model:
                     a.language = self.tokenizer.token_to_id(r[i][0][0])
 
             rs = self.generate_with_fallback(encoded, [a.language for a in active], **model_args)
-            i = 0
-            while i < len(rs):
-                a = active[i]
+            for i, a in enumerate(active):
                 tokens, score, no_speech, temperature = rs[i]
 
                 segments, seek = [], 1500
@@ -289,35 +331,7 @@ class Model:
                 a.chunks.append(nc)
                 a.seek += seek
 
-                a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
-                if not a.dispatched and a.bar.n/a.bar.total > 0.3 and pending_activation < len(streams):
-                    idx = streams_sorted[pending_activation]
-                    streams[idx].start()
-                    a.dispatched = True
-                    pending_activation += 1
-                # a.bar.update(seek*0.02)
                 a.buffer = a.buffer[:, 2*seek:]
-                if a.buffer.shape[-1] < 3000:
-                    try:
-                        a.buffer = streams[a.idx].np.concatenate((a.buffer, next(a.stream)), axis=-1)
-                    except StopIteration:
-                        pass
-                    if a.buffer.shape[-1] == 0:
-                        results[a.idx] = Transcript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
-                        a.bar.close()
-                        main_bar.update(1)
-                        if pending < len(streams):
-                            idx = streams_sorted[pending]
-                            bar = tqdm(total=streams[idx].duration, unit_scale=True, unit=" seconds", unit_divisor=60, desc=streams[idx].title)
-                            generator = streams[idx].generator()
-                            active[i] = _TranscriptionState(idx=idx, stream=generator,
-                                                            buffer=next(generator), seek=0, bar=bar,
-                                                            lines=[], chunks=[], language=languages[idx], dispatched=False)
-                            pending += 1
-                        else:
-                            active.pop(i)
-                            rs.pop(i)
-                            i -= 1
-                i += 1
+                a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
         return results
 
