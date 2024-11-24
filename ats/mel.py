@@ -83,6 +83,7 @@ class MelReader(Thread):
         self.num_chunks = num_chunks
         self.n_mels = n_mels
         self.lmax = -np.inf
+        self.daemon = True
 
         self.duration = chapter.end - chapter.start
         self.title = stream.parent.title + '/' + chapter.title
@@ -148,8 +149,8 @@ class GPUMelReader(MelReader):
 class CPUMelReader(MelReader):
     def mel(self, buffer):
         filters, window = mel_filters_window(n_mels=self.n_mels)
-        chunks = [buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH) if len(buffer[i:i+N_FFT]) == N_FFT]
-        chunks = np.stack(chunks)
+        chunks = [buffer[i:i+N_FFT] for i in range(0, len(buffer), HOP_LENGTH)]# if len(buffer[i:i+N_FFT]) == N_FFT]
+        chunks = np.stack(chunks[:-2])
 
         stft = np.fft.fft(chunks*window).T[:(N_FFT >> 1) + 1]
         magnitudes = np.abs(stft) ** 2 # https://stackoverflow.com/questions/30437947/most-memory-efficient-way-to-compute-abs2-of-complex-numpy-ndarray

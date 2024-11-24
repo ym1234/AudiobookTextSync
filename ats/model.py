@@ -180,11 +180,10 @@ class StreamTranscript:
     chapters: [ChapterTranscript]
 
 class Model:
-    def __init__(self, model_size_or_path, device='auto', device_index=None, quantize=True, download_root=None, local_files_only=False):
+    def __init__(self, model_size_or_path, device='auto', device_index=0, quantize=True, download_root=None, local_files_only=False):
         model_path = model_size_or_path if os.path.isdir(model_size_or_path) else download_model(model_size_or_path, download_root, local_files_only)
         num_cuda = get_cuda_device_count()
         device = 'cpu' if  num_cuda == 0 else device
-        device_index = device_index if device_index is not None else list(range(num_cuda)) if device == 'cuda' else 0
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
         self.tokenizer = Tokenizer(path=model_path)
         self.mel_reader = mel.GPUMelReader if self.device == 'cuda' and mel.has_cupy else mel.CPUMelReader
