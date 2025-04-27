@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from setuptools import setup, find_packages
 from pathlib import Path
 from setuptools import Extension, setup
 from Cython.Build import cythonize
@@ -30,7 +30,7 @@ setup(name='ats',
       license_files=('LICENSE',),
       long_description=long_description,
       long_description_content_type='text/markdown',
-      packages = ['ats', 'ats.calign'],
+      packages=find_packages(),
       ext_modules=cythonize([calign], language_level="3"),
       classifiers=[
         "Programming Language :: Python :: 3",

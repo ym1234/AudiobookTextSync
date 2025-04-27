@@ -1,8 +1,6 @@
 import numpy as np
 from functools import cache
-from tqdm.auto import tqdm
 from threading import Thread
-import threading
 from queue import Queue
 from subprocess import Popen, run, CalledProcessError, PIPE
 
@@ -89,13 +87,14 @@ class MelReader(Thread):
         self.title = stream.parent.title + '/' + chapter.title
         self.offset = chapter.start
 
-        chapters = [ '-ss', str(chapter.start), '-to', str(chapter.end) ] if chapter is not None else []
         self.cmd = [
                 "ffmpeg",
                 "-nostdin", "-nostats", "-hide_banner",
                 "-loglevel", "fatal",
                 "-threads", "1",
-            ] + chapters + [
+            ]
+        if chapters: self.cmd += [ '-ss', str(chapter.start), '-to', str(chapter.end) ]
+        self.cmd += [
                 "-i",  str(stream.parent.path),
                 "-f", "f32le",
                 "-ac", "1",

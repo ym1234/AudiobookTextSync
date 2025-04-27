@@ -1,7 +1,7 @@
 import numpy as np
 
 def align_sub(coords1, coords2, ends1, ends2):
-    ends2idx = np.searchsorted(coords2, ends2, side='right')
+    ends2idx = np.searchsorted(coords2, ends2)
     segstart, segend, prev, ret = 0, 0, 0, []
     for k in ends2idx[:-1]:
         cend = coords1[k]

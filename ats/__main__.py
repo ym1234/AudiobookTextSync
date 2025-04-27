@@ -1,15 +1,5 @@
-from ats import align
-from ats.calign import Aligner
 from ats.lang import get_lang
-
-from ats.audio import Container
-from ats.text import TextFile, SubLine
-from ats.model import Model, available_models
-
-from pathlib import Path
-from itertools import chain
 from tqdm.auto import tqdm
-from functools import partialmethod
 
 def joinuntil(a, n):
     l, end = 0, 0
@@ -51,6 +41,7 @@ def match_start(aligner, audio, text, prepend, append, nopend):
 
     return ats, sta
 
+Batch = namedtuple('Batch', ['book', 'start', 'text', 'score'])
 def expand_matches(audio, text, ats, sta):
     batches = []
     for ai, a in enumerate(audio):
@@ -129,6 +120,7 @@ def to_epub():
     pass
 
 def to_subs(text, subs, alignment):
+    from ats.text import SubLine
     segments = []
     for ai, a in enumerate(alignment):
         if a[0] == -1:
@@ -175,6 +167,9 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             use_cache, cache_dir, overwrite_cache,
             prepend_punctuations, append_punctuations, nopend_punctuations,
             **model_args):
+    from ats import align
+    from ats.calign import Aligner
+    from ats.model import Model, available_models
     # TODO redo the cache
     model = Model(model, device, quantize=quantize, local_files_only=local_only)
     print(f"Using device: {model.device} with {model.compute_type} compute.")
@@ -216,6 +211,14 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
 
 if __name__ == "__main__":
     import argparse
+
+    from ats.text import TextFile
+    from ats.audio import Container
+
+    from functools import partialmethod
+    from pathlib import Path
+    from itertools import chain
+
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     parser.add_argument("--text", type=Path, required=True, default=[], action='append', help="path to the script file")
 
