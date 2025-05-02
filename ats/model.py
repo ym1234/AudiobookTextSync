@@ -188,7 +188,8 @@ class Model:
         device = 'cpu' if  num_cuda == 0 else device
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
         self.tokenizer = Tokenizer(path=model_path)
-        self.mel_reader = mel.GPUMelReader if self.device == 'cuda' and mel.has_cupy else mel.CPUMelReader
+        # self.mel_reader = mel.GPUMelReader if self.device == 'cuda' and mel.has_cupy else mel.CPUMelReader
+        self.mel_reader = mel.CPUMelReader
         self.np = mel.np
         # self.np = mel.cp if self.device == 'cuda' and mel.has_cupy else mel.np # hacky
 
