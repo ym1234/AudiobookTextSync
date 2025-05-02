@@ -93,7 +93,7 @@ class MelReader(Thread):
                 "-loglevel", "fatal",
                 "-threads", "1",
             ]
-        if chapters: self.cmd += [ '-ss', str(chapter.start), '-to', str(chapter.end) ]
+        if chapter: self.cmd += [ '-ss', str(chapter.start), '-to', str(chapter.end) ]
         self.cmd += [
                 "-i",  str(stream.parent.path),
                 "-f", "f32le",
