@@ -2,6 +2,7 @@ import os
 import multiprocessing
 import huggingface_hub
 import tokenizers
+import numpy as np
 from typing import Generator
 from dataclasses import dataclass
 from functools import cached_property
