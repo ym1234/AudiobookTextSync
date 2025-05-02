@@ -12,7 +12,7 @@ def match_start(aligner, audio, text, prepend, append, nopend):
     ats, sta = {}, {}
     textcache = {}
     for ai, afile in enumerate(tqdm(audio)):
-        for i, ach in enumerate(tqdm(afile)):
+        for i, ach in enumerate(tqdm(afile.chapters)):
             if (ai, i) in ats: continue
 
             lang = get_lang(ach.language, prepend, append, nopend)
