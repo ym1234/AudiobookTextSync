@@ -189,7 +189,8 @@ class Model:
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
         self.tokenizer = Tokenizer(path=model_path)
         self.mel_reader = mel.GPUMelReader if self.device == 'cuda' and mel.has_cupy else mel.CPUMelReader
-        self.np = mel.cp if self.device == 'cuda' and mel.has_cupy else mel.np # hacky
+        self.np = mel.np
+        # self.np = mel.cp if self.device == 'cuda' and mel.has_cupy else mel.np # hacky
 
     @property
     def device(self): return self.model.device
@@ -299,9 +300,14 @@ class Model:
                     i -= 1
                 i += 1
 
-            padded = [self.np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
-                      for a in active]
-            encoded = self.encode(self.np.stack(padded))
+            try:
+                padded = [self.np.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
+                        for a in active]
+                encoded = self.encode(self.np.stack(padded))
+            except:
+                tqdm.write(' '.join([str(i.shape) for i in padded]))
+                continue
+
 
             if any(a.language is None for a in active):
                 r = self.model.detect_language(encoded)

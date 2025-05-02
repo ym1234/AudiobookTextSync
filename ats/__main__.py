@@ -41,7 +41,7 @@ def match_start(aligner, audio, text, prepend, append, nopend):
 
     return ats, sta
 
-Batch = namedtuple('Batch', ['book', 'start', 'text', 'score'])
+# Batch = namedtuple('Batch', ['book', 'start', 'text', 'score'])
 def expand_matches(audio, text, ats, sta):
     batches = []
     for ai, a in enumerate(audio):

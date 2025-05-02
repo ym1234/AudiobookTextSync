@@ -335,6 +335,8 @@ int32_t trace32(
       ly -= 1;
   }
 
+#undef TRACEAPPEND
+
   *tracelen = tracepos;
   return score;
 }

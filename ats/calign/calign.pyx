@@ -178,7 +178,6 @@ cdef class Aligner:
     @cython.wraparound(False)
     @cython.cdivision(True)
     def hirschberg(self, query: Union[str, np.ndarray], database: Union[str, np.ndarray]):
-        # print('\nHIRSCHBERG')
         cdef const cnp.uint32_t[::1] q = np.frombuffer(query.encode('utf-32le'), dtype=np.uint32) if isinstance(query, str) else  query.astype(np.uint32)
         cdef const cnp.uint32_t[::1] d = np.frombuffer(database.encode('utf-32le'), dtype=np.uint32) if isinstance(database, str) else database.astype(np.uint32)
         cdef int64_t lq = len(q)
