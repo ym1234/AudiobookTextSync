@@ -169,7 +169,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
             **model_args):
     from ats import align
     from ats.calign import Aligner
-    from ats.model import Model, available_models
+    from ats.model import Model
     # TODO redo the cache
     model = Model(model, device, quantize=quantize, local_files_only=local_only)
     print(f"Using device: {model.device} with {model.compute_type} compute.")
@@ -214,6 +214,7 @@ if __name__ == "__main__":
 
     from ats.text import TextFile
     from ats.audio import Container
+    from ats.model import available_models
 
     from functools import partialmethod
     from pathlib import Path
