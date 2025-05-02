@@ -252,7 +252,7 @@ class Model:
         assert len(chapters) == len(languages)
         results = self._transcribe(chapters, batch_size, languages, **model_args)
 
-        idx = [0] + np.cumsum([len(s.parent.chapters) for s in streams], dtype=np.int).tolist()
+        idx = [0] + np.cumsum([len(s.parent.chapters) for s in streams], dtype=int).tolist()
         grouped = [results[s:e] for s, e in zip(idx, idx[1:])]
 
         return [StreamTranscript(stream=s, segments=list(chain([g.segments for g in grouped[i]])), chapters=grouped[i]) for i, s in enumerate(streams)]
