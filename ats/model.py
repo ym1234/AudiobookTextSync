@@ -242,7 +242,7 @@ class Model:
         penalty = norm if length_penalty is None else gnmt
         return [sorted(c, key=penalty)[-1] if c else ([], -1, no_speech[i], -1) for c in cands]
 
-    def transcribe(self, streams, num_chunks, batch_size, language, use_stream_language=False, **model_args):
+    def transcribe(self, streams, num_chunks, batch_size, language=None, use_stream_language=False, **model_args):
         chapters = [self.mel_reader(s, c, n_mels=self.n_mels, num_chunks=num_chunks) for s in streams for c in s.parent.chapters]
         if use_stream_language:
             languages = [s.language if s.strip() else None for s in streams for _ in s.parent.chapters]

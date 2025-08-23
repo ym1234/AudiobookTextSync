@@ -121,7 +121,7 @@ class Epub:
 
     @classmethod
     def from_file(cls, path):
-        file = epub.read_epub(path, {"ignore_ncx": True})
+        file = epub.read_epub(path, dict(ignore_ncx=True))
 
         flat_toc = _flatten(file.toc)
         m = {it.id: i for i, e in enumerate(flat_toc) if (it := file.get_item_with_href(urllib.parse.unquote(e.href.split("#")[0])))}

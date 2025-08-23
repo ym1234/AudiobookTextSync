@@ -176,7 +176,7 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
     transcription = model.transcribe(select_streams(audio), batch_size=batch_size, num_chunks=10,
                                      language=language, use_stream_language=False, **model_args)
 
-    aligner = Aligner(memsize=memsize, match=1, mismatch=-1, gap_open=-1, gap_extend=-1)
+    aligner = Aligner(memsize=memsize, match=1, mismatch=-2, gap_open=-2, gap_extend=-1)
     print('Fuzzy matching chapters...')
     ats, sta = match_start(aligner, transcription, text, prepend_punctuations, append_punctuations, nopend_punctuations)
     audio_batches = expand_matches(audio, text, ats, sta)

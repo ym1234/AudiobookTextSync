@@ -1,6 +1,5 @@
 cimport cython
 from libc.stdint cimport int64_t, uint32_t, int32_t
-from posix cimport mman
 
 import numpy as np
 cimport numpy as cnp
@@ -45,7 +44,7 @@ cdef inline int64_t _align(int64_t n, int64_t alignment) noexcept:
 
 cdef class BumpAllocator:
     cdef char *mem
-    cdef int64_t size
+    cdef int64_t allocsize
     cdef int64_t cursor
 
     cdef int64_t[32] checkpoints
@@ -53,20 +52,25 @@ cdef class BumpAllocator:
 
     def __init__(self, size: int):
         cdef int64_t allocsize = _align(size,  2*1024*1024)
-        cdef void *chunk = mman.mmap(NULL, allocsize, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_ANONYMOUS | mman.MAP_PRIVATE, -1, 0)
-        mman.madvise(chunk, allocsize, mman.MADV_HUGEPAGE)
-        if chunk == <void*> -1:
-            raise MemoryError("mmap -1")
+        self.file = mmap.mmap(-1, allocsize)
+        self.mem = <char *>self.file
+        # cdef void *chunk = mman.mmap(NULL, allocsize, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_ANONYMOUS | mman.MAP_PRIVATE, -1, 0)
+        # mman.madvise(chunk, allocsize, mman.MADV_HUGEPAGE)
+        # if chunk == <void*> -1:
+        #     raise MemoryError("mmap -1")
 
-        self.mem = <char *>chunk
+        # self.mem = <char *>chunk
         self.cursor = 0
-        self.size = allocsize
+        self.allocsize = allocsize
 
     cdef inline bint check(self, int64_t size) noexcept:
-        return self.cursor + size <= self.size
+        return self.cursor + size <= self.allocsize
+
+    cdef inline int64_t size(self) noexcept:
+        return self.cursor - self.checkpoints[self.checkpoint-1]
 
     cdef inline bint isoverflow(self) noexcept:
-        return self.cursor > self.size
+        return self.cursor > self.allocsize
 
     cdef inline void save(self) noexcept:
         self.checkpoints[self.checkpoint] = self.cursor
@@ -85,9 +89,16 @@ cdef class BumpAllocator:
         self.cursor = 0
         self.checkpoint = 0
 
-    def __dealloc__(self):
-        if mman.munmap(self.mem, self.size) < 0:
-            raise MemoryError("munmap -1")
+    def __enter__(self):
+        self.save()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.restore()
+
+    def close(self):
+        self.mem = None
+        self.file.close()
 
 cdef class Aligner:
     cdef int match, mismatch, gap_open, gap_extend
@@ -114,27 +125,24 @@ cdef class Aligner:
 
         cdef int64_t bufsize = _align(aligned * sizeof(int32_t), 64)
 
-        cdef __m256i *strided  = <__m256i *> self.allocator.alloc(bufsize)
-        cdef __m256i *pvHLoad  = <__m256i *> self.allocator.alloc(bufsize)
-        cdef __m256i *pvHStore = <__m256i *> self.allocator.alloc(bufsize)
-        cdef __m256i *pvELoad  = <__m256i *> self.allocator.alloc(bufsize)
-        cdef __m256i *pvEStore = <__m256i *> self.allocator.alloc(bufsize)
+        with self.allocator as allocator:
+            cdef __m256i *strided  = <__m256i *> allocator.alloc(bufsize)
+            cdef __m256i *pvHLoad  = <__m256i *> allocator.alloc(bufsize)
+            cdef __m256i *pvHStore = <__m256i *> allocator.alloc(bufsize)
+            cdef __m256i *pvELoad  = <__m256i *> allocator.alloc(bufsize)
+            cdef __m256i *pvEStore = <__m256i *> allocator.alloc(bufsize)
 
-        if self.allocator.isoverflow():
-            mem = float(self.allocator.cursor)
-            self.allocator.clear()
-            raise MemoryError(f"need at least {mem/1024**3:.2f} GiB(s)")
+            if allocator.isoverflow(): raise MemoryError(f"need at least {float(allocator.size())/1024**3:.2f} GiB(s)")
 
-        reset32(pvHLoad, NULL, pvELoad, NULL, strided, NULL,  &q[0], self.gap_open, self.gap_extend, lq, stride)
-        sgcol32(strided, &d[0],
-                stride, ld,
-                pvHLoad, pvHStore, pvELoad, pvEStore,
-                self.match, self.mismatch, self.gap_open, self.gap_extend)
+            reset32(pvHLoad, NULL, pvELoad, NULL, strided, NULL,  &q[0], self.gap_open, self.gap_extend, lq, stride)
+            sgcol32(strided, &d[0],
+                    stride, ld,
+                    pvHLoad, pvHStore, pvELoad, pvEStore,
+                    self.match, self.mismatch, self.gap_open, self.gap_extend)
 
-        cdef int32_t *ra = <int32_t *> (pvHStore if ld & 1 else pvHLoad)
-        cdef int32_t r = ra[(lq-1) // stride + ((lq-1) % stride) * 8]
-        self.allocator.clear()
-        return r
+            cdef int32_t *ra = <int32_t *> (pvHStore if ld & 1 else pvHLoad)
+            cdef int32_t r = ra[(lq-1) // stride + ((lq-1) % stride) * 8]
+            return r
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -153,26 +161,23 @@ cdef class Aligner:
         cdef int64_t bufsize = _align(aligned*sizeof(int32_t), 64)
         cdef int64_t tablesize = _align((ld + 1)*aligned*sizeof(int32_t), 64)
 
-        cdef __m256i *strided  = <__m256i *> self.allocator.alloc(bufsize)
+        with self.allocator as allocator:
+            cdef __m256i *strided  = <__m256i *> allocator.alloc(bufsize)
 
-        cdef __m256i *pvH = <__m256i *> self.allocator.alloc(tablesize)
-        cdef __m256i *pvE = <__m256i *> self.allocator.alloc(tablesize)
-        cdef __m256i *pvF = <__m256i *> self.allocator.alloc(tablesize)
+            cdef __m256i *pvH = <__m256i *> allocator.alloc(tablesize)
+            cdef __m256i *pvE = <__m256i *> allocator.alloc(tablesize)
+            cdef __m256i *pvF = <__m256i *> allocator.alloc(tablesize)
 
-        if self.allocator.isoverflow():
-            mem = float(self.allocator.cursor)
-            self.allocator.clear()
-            raise MemoryError(f"need {mem/1024**3:.2f} GiB(s)")
+            if allocator.isoverflow(): raise MemoryError(f"need {float(allocator.size())/1024**3:.2f} GiB(s)")
 
-        reset32(pvH, NULL, pvE, NULL, strided, NULL, &q[0], self.gap_open, self.gap_extend, lq, stride)
-        sgtable32(strided, &d[0], stride, ld, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend)
+            reset32(pvH, NULL, pvE, NULL, strided, NULL, &q[0], self.gap_open, self.gap_extend, lq, stride)
+            sgtable32(strided, &d[0], stride, ld, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend)
 
-        cdef int32_t score = trace32(&q[0], &d[0], lq, aligned, ld,
-                                     <int32_t *> pvH, <int32_t *> pvE, <int32_t *> pvF,
-                                     self.match, self.mismatch, self.gap_open, self.gap_extend,
-                                     <int64_t *> traceback.data, &tracelen, 0, 0)
-        self.allocator.clear()
-        return score, traceback[:tracelen].reshape(-1, 2)[::-1].T
+            cdef int32_t score = trace32(&q[0], &d[0], lq, aligned, ld,
+                                        <int32_t *> pvH, <int32_t *> pvE, <int32_t *> pvF,
+                                        self.match, self.mismatch, self.gap_open, self.gap_extend,
+                                        <int64_t *> traceback.data, &tracelen, 0, 0)
+            return score, traceback[:tracelen].reshape(-1, 2)[::-1].T
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
