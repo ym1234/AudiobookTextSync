@@ -265,7 +265,7 @@ class Model:
 
         def confidence(group):
             vals = np.array([(c.logprob, len(c.tokens)) for ch in group for c in ch.chunks])
-            return np.exp(np.mean(vals[:, 0]/(vals[:, 1].sum()+1)))
+            return np.exp(vals[:, 0].sum()/(vals[:, 1].sum()+1))
 
         return [Transcript(stream=s, confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i, s in enumerate(streams)]
