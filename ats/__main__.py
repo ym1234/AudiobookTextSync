@@ -339,7 +339,7 @@ if __name__ == "__main__":
         model = Model(**{a.dest: getattr(args, a.dest) for a in mg._group_actions})
         print(f"Using device: {model.device} with {model.compute_type} compute.")
         transcripts = model.transcribe(streams, language=args.language, **{a.dest: getattr(args, a.dest) for a in tg._group_actions})
-        for stream, trascript in zip(streams, transcripts):
+        for stream, transcript in zip(streams, transcripts):
             cache.put(stream, transcript)
     elif args.cache_entry is not None:
         pass
