@@ -113,7 +113,7 @@ class Cache:
         cur.execute(INSERT_TRANSCRIPT, dict(filename=stream.parent.path.name, title=stream.parent.title, stream=stream.idx,
                                             confidence=transcript.confidence, model=model, date=datetime.now()))
         transcript_id = cur.fetchall()
-        cur.executemany(INSERT_CHAPTER_TRANSCRIPT, [dict(transcript_id=transcript_id[0]['id'], idx=i, **as_dict(c))
+        cur.executemany(INSERT_CHAPTER_TRANSCRIPT, [dict(transcript_id=transcript_id[0]['id'], idx=i, **asdict(c))
                                                     for i, c in enumerate(transcript.chapters)])
         chapter_ids = cur.fetchall()
         if chapter_ids != len(transcript.chapters):
