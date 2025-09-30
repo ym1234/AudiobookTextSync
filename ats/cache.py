@@ -110,7 +110,7 @@ class Cache:
 
     def put(self, stream, transcript, model):
         cur = self.conn.cursor()
-        cur.execute(INSERT_TRANSCRIPT, dict(filename=stream.container.path.name, title=stream.container.title, stream=stream.idx,
+        cur.execute(INSERT_TRANSCRIPT, dict(filename=stream.parent.path.name, title=stream.parent.title, stream=stream.idx,
                                             confidence=transcript.confidence, model=model, date=datetime.now()))
         transcript_id = cur.fetchall()
         cur.executemany(INSERT_CHAPTER_TRANSCRIPT, [dict(transcript_id=transcript_id[0]['id'], idx=i, **as_dict(c))
