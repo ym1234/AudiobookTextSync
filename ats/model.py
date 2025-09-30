@@ -267,7 +267,7 @@ class Model:
             vals = np.array([(c.logprob, len(c.tokens)) for ch in grouped[i] for c in ch.chunks])
             return np.exp(np.mean(vals[:, 0]/(vals[:, 1].sum()+1)))
 
-        return [StreamTranscript(stream=s, confidence=confidence(grouped[i]), chapters=grouped[i])
+        return [Transcript(stream=s, confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i, s in enumerate(streams)]
 
     def _transcribe(self, streams, batch_size, languages, **model_args):
