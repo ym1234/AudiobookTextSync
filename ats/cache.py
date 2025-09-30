@@ -46,7 +46,7 @@ COMMIT;
 
 INSERT_TRANSCRIPT = """
 INSERT INTO transcript (filename, title, stream, model, confidence, date)
-VALUES (:filename, :title, :stream, :model, :confidence, :date) RETURNING ID;
+VALUES (:filename, :title, :stream, :model, :confidence, :date) RETURNING id;
 """
 
 INSERT_CHAPTER_TRANSCRIPT = """
