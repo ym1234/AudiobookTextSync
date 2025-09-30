@@ -340,7 +340,7 @@ if __name__ == "__main__":
         print(f"Using device: {model.device} with {model.compute_type} compute.")
         transcripts = model.transcribe(streams, language=args.language, **{a.dest: getattr(args, a.dest) for a in tg._group_actions})
         for stream, transcript in zip(streams, transcripts):
-            cache.put(stream, transcript)
+            cache.put(stream, transcript, args.model)
     elif args.cache_entry is not None:
         pass
     else:
