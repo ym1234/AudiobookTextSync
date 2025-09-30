@@ -45,22 +45,22 @@ COMMIT;
 """
 
 INSERT_TRANSCRIPT = """
-INSERT INTO TABLE transcript (filename, title, stream, model, confidence, date)
+INSERT INTO transcript (filename, title, stream, model, confidence, date)
 VALUES (:filename, :title, :stream, :model, :confidence, :date) RETURNING ID;
 """
 
 INSERT_CHAPTER_TRANSCRIPT = """
-INSERT INTO TABLE chapter_transcript (idx, transcript_id, title, start, end)
+INSERT INTO chapter_transcript (idx, transcript_id, title, start, end)
 VALUES (:idx, :transcript_id, :title, :start, :end) RETURNING id;
 """
 
 INSERT_CHUNKS = """
-INSERT INTO TABLE chunks (chapter_id, idx, tokens, start, end, segment_start, segment_end, nospeech_prob, temperature, logprob)
+INSERT INTO chunks (chapter_id, idx, tokens, start, end, segment_start, segment_end, nospeech_prob, temperature, logprob)
 VALUES (:chapter_id, :idx, :tokens, :start, :end, :segment_start, :segment_end, :nospeech_prob, :temperature, :logprob);
 """
 
 INSERT_SEGMENTS = """
-INSERT INTO TABLE segment (chapter_id, idx, content, start, end)
+INSERT INTO segment (chapter_id, idx, content, start, end)
 VALUES (:chapter_id, :idx, :content, :start, :end);
 """
 
