@@ -23,6 +23,9 @@ class Txt:
     @property
     def title(self): return self.path.name
 
+    @classmethod
+    def from_file(cls, path): return cls(path)
+
     def text(self, *args, **kwargs):
         return [TextParagraph(idx=i, content=o)
                 for i, v in enumerate(self.path.read_text().split('\n'))
@@ -162,31 +165,21 @@ class Epub:
             chapters.append(chapter)
         return cls(epub=file, path=path, title=file.title.strip() or path.name, chapters=chapters)
 
-TEXT_EXTENSIONS = set(['txt', 'epub', 'srt', 'vtt'])
+SUPPORTED_FORMATS = dict(txt=Txt, epub=Epub, srt=SubFile, vtt=SubFile)
 @dataclass(eq=True, frozen=True)
 class TextFile:
-    @classmethod
-    def from_file(cls, path):
+    @staticmethod
+    def is_compat(path):
+        return path.suffix[1:] in SUPPORTED_FORMATS
+
+    @staticmethod
+    def from_file(path):
         ext = path.suffix[1:]
-        if 'txt' == ext:
-            return Txt(path)
-        elif 'srt' == ext or 'vtt' == ext:
-            return SubFile(path)
-        elif 'epub' == ext:
-            return Epub.from_file(path)
-        elif ext in TEXT_EXTENSIONS:
+        try:
+            cls = SUPPORTED_FORMATS[ext]
+        except Exception as e:
+            raise NotImplementedError(f"filetype {ext} not supported") from e
+        if cls is None:
             raise NotImplementedError(f"filetype {ext} not implemented yet")
-        else:
-            raise NotImplementedError(f"filetype {ext} not supported")
 
-    @classmethod
-    def from_dir(cls, path):
-        if path.is_file():
-            yield cls.from_file(path)
-            return
-
-        for root, _, files in os.walk(str(path)): # TODO path.walk is python3.12
-            for f in files:
-                p = Path(root)/f
-                if p.suffix[1:] in TEXT_EXTENSIONS:
-                    yield cls.from_file(p)
+        return cls.from_file(path)

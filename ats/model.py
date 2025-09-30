@@ -19,6 +19,8 @@ def _import_c2():
 
     finder = importlib.machinery.PathFinder()
     c2spec = finder.find_spec('ctranslate2')
+    if c2spec is None:
+        raise ModuleNotFoundError('c2translate2')
 
     if sys.platform == "win32":
         import ctypes
@@ -148,22 +150,6 @@ class Tokenizer:
         return words, word_tokens
 
 
-@dataclass
-class Chunk:
-    start: int # in mel frames
-    end: int
-    sidx: int
-    eidx: int
-    temperature: float
-    avg_logprob: float
-    nospeech_prob: float
-    tokens: list # idk if i care about this
-
-@dataclass
-class ChapterTranscript:
-    language: str
-    chunks: [Chunk]
-    segments: [SubLine]
 
 @dataclass
 class _TranscriptionState:
@@ -177,14 +163,33 @@ class _TranscriptionState:
     done: bool
 
 @dataclass
-class StreamTranscript:
+class Chunk:
+    start: int # in mel frames
+    end: int
+    segment_start: int
+    segment_end: int
+    temperature: float
+    logprob: float
+    nospeech_prob: float
+    tokens: list # idk if i care about this
+
+@dataclass
+class ChapterTranscript:
+    start: float
+    end: float
+    language: str
+    segments: list
+    chunks: [Chunk]
+
+@dataclass
+class Transcript:
     stream: Stream
-    segments: [SubLine]
+    confidence: float
     chapters: [ChapterTranscript]
 
 class Model:
-    def __init__(self, model_size_or_path, device='auto', device_index=0, quantize=True, download_root=None, local_files_only=False):
-        model_path = model_size_or_path if os.path.isdir(model_size_or_path) else download_model(model_size_or_path, download_root, local_files_only)
+    def __init__(self, model, device='auto', device_index=0, quantize=True, download_root=None, local_files_only=False):
+        model_path = model if os.path.isdir(model) else download_model(model, download_root, local_files_only)
         num_cuda = get_cuda_device_count()
         device = 'cpu' if  num_cuda == 0 else device
         self.model = Whisper(model_path, device=device, device_index=device_index, compute_type='auto' if quantize else 'default')
@@ -218,10 +223,12 @@ class Model:
         needs_fallback = [True]*batch_size
         for i, t in enumerate(temperatures):
             # beam size alone is trash
-            decode_args = {"beam_size": beam_size, "patience": patience, "sampling_temperature": t}
+            if t > 0:
+                decode_args = dict(beam_size=1, sampling_temperature=t, num_hypotheses=num_hypotheses)
+            else:
+                decode_args = dict(beam_size=beam_size, patience=patience)
             if i != 0:
-                decode_args['num_hypotheses'] = num_hypotheses
-                # tqdm.write(f"DECODING FAILED!! {i}")
+                tqdm.write(f"DECODING FAILED!! {i}")
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):
@@ -255,7 +262,12 @@ class Model:
         idx = [0] + np.cumsum([len(s.parent.chapters) for s in streams], dtype=int).tolist()
         grouped = [results[s:e] for s, e in zip(idx, idx[1:])]
 
-        return [StreamTranscript(stream=s, segments=list(chain([g.segments for g in grouped[i]])), chapters=grouped[i]) for i, s in enumerate(streams)]
+        def confidence(group):
+            vals = np.array([(c.logprob, len(c.tokens)) for ch in grouped[i] for c in ch.chunks])
+            return np.exp(np.mean(vals[:, 0]/(vals[:, 1].sum()+1)))
+
+        return [StreamTranscript(stream=s, confidence=confidence(grouped[i]), chapters=grouped[i])
+                for i, s in enumerate(streams)]
 
     def _transcribe(self, streams, batch_size, languages, **model_args):
         main_bar = tqdm(total=len(streams), desc="Transcribing", position=0, leave=True)
@@ -288,7 +300,9 @@ class Model:
                             tqdm.write(str(streams[a.idx].stderr))
                         a.done = True
                 elif a.buffer.shape[-1] == 0:
-                    results[a.idx] = ChapterTranscript(language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
+                    results[a.idx] = ChapterTranscript(title=streams[a.idx].title, start=streams[a.idx].offset,
+                                                       end=streams[a.idx].offset + streams[a.idx].duration,
+                                                       language=self.tokenizer.decode([a.language])[2:-2], chunks=a.chunks, segments=a.lines)
                     a.bar.close()
                     main_bar.update(1)
                     if pending < len(streams):
@@ -333,9 +347,9 @@ class Model:
                          for s in segments]
 
                 nc = Chunk(start=a.seek*2, end=a.seek*2+seek*2,
-                           sidx=len(a.lines), eidx=len(a.lines)+len(lines),
+                           segment_start=len(a.lines), segment_end=len(a.lines)+len(lines),
                            temperature=temperature, nospeech_prob=no_speech,
-                           avg_logprob=score/(len(tokens)+1), tokens=tokens)
+                           logprob=score, tokens=tokens)
                 a.lines.extend(lines)
                 a.chunks.append(nc)
                 a.seek += seek

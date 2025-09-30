@@ -84,7 +84,7 @@ class MelReader(Thread):
         self.daemon = True
 
         self.duration = chapter.end - chapter.start
-        self.title = stream.parent.title + '/' + chapter.title
+        self.title = chapter.title
         self.offset = chapter.start
 
         self.cmd = [

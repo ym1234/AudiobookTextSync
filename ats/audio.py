@@ -1,4 +1,5 @@
 import os
+import magic
 import pycountry
 import json
 import mimetypes
@@ -55,17 +56,6 @@ class Container:
             stream = Stream(idx=s['index'], duration=s.get('duration', duration), language=language, parent=self)
             self.streams.append(stream)
         return self
-
-    @classmethod
-    def from_dir(cls, path):
-        if not path.exists(): raise FileNotFoundError(f"{str(path)} doesn't exist")
-        mt = {'video', 'audio'}
-        for p, _, files in os.walk(str(path)): # TODO path.walk is python3.12
-            p = Path(p)
-            for f in files:
-                t, _ = mimetypes.guess_type(f)
-                if p.suffix != ".ass" and t is not None and t.split('/', 1)[0] in mt:
-                    yield cls.from_file(p/f)
 
 @dataclass(eq=True, frozen=True)
 class Chapter:
