@@ -175,6 +175,7 @@ class Chunk:
 
 @dataclass
 class ChapterTranscript:
+    title: str
     start: float
     end: float
     language: str
