@@ -264,7 +264,7 @@ class Model:
         grouped = [results[s:e] for s, e in zip(idx, idx[1:])]
 
         def confidence(group):
-            vals = np.array([(c.logprob, len(c.tokens)) for ch in grouped[i] for c in ch.chunks])
+            vals = np.array([(c.logprob, len(c.tokens)) for ch in group for c in ch.chunks])
             return np.exp(np.mean(vals[:, 0]/(vals[:, 1].sum()+1)))
 
         return [Transcript(stream=s, confidence=confidence(grouped[i]), chapters=grouped[i])
