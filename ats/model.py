@@ -283,6 +283,7 @@ class Model:
 
         mel_queue = Queue()
         for k in jobs_sorted: mel_queue.put(jobs[k])
+        # mel_queue.shutdown()
         mel_workers = [MelWorker(mel_queue, n_mels=self.n_mels, num_chunks=num_chunks) for _ in range(multiprocessing.cpu_count())]
         for w in mel_workers: w.start()
 
@@ -306,7 +307,7 @@ class Model:
             active.append(new_active(i))
             pending += 1
 
-        while len(active):
+        while True:
             i = 0
             while i < len(active):
                 a = active[i]
@@ -324,6 +325,9 @@ class Model:
                         active.pop(i)
                     i -= 1 # lol hacky
                 i += 1
+
+            if not len(active):
+                break
 
             padded = [cnp.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
                     for a in active]
@@ -361,6 +365,6 @@ class Model:
                 a.buffer = a.buffer[:, 2*seek:]
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
 
-        for w in mel_workers: w.join()
+        # for w in mel_workers: w.join()
         return results
 

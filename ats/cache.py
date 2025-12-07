@@ -100,10 +100,11 @@ class Cache:
     def get(self, id):
         pass
 
-    def put(self, stream, transcript):
+    def put(self, r, transcript):
         with self.conn:
+            container = r['file']
             transcript_id = self.conn.execute(INSERT_TRANSCRIPT,
-                                              dict(filename=stream.parent.path.name, title=stream.parent.title, stream=stream.idx,
+                                              dict(filename=container.path.name, title=container.title, stream=r['stream'],
                                                    confidence=transcript.confidence, model=transcript.model, date=transcript.at)).fetchone()['id']
 
             for i, c in enumerate(transcript.chapters):
