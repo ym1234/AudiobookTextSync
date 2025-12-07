@@ -317,7 +317,7 @@ class Model:
                     if end: a.done = True
                 elif a.buffer.shape[-1] == 0:
                     finalize_transcript(a)
-                    if pending < len(streams):
+                    if pending < len(jobs):
                         active[i] = new_active(pending)
                         pending += 1
                     else:
