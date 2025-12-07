@@ -296,7 +296,7 @@ class Model:
             main_bar.update(1)
 
         def new_active(pending):
-            idx = jobs_sorted[i]
+            idx = jobs_sorted[pending]
             chapter = jobs[idx]['chapter']
             bar = tqdm(total=chapter.end-chapter.start, unit_scale=True, unit=" seconds", desc=chapter.title)
             return _TranscriptionState(idx=idx, buffer=cnp.zeros((self.n_mels, 0)), lines=[], chunks=[],
