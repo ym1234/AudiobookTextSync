@@ -325,7 +325,7 @@ if __name__ == "__main__":
         print(f"Using device: {model.device} with {model.compute_type} compute.")
 
         transcripts = model.transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
-        for r, t in zip(cacheless_streams, transcript):
+        for r, t in zip(cacheless_streams, transcripts):
             cache.put(r, t)
             cached_streams.append({**r, 'transcript': t})
 

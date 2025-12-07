@@ -95,7 +95,7 @@ class Cache:
         self.conn.row_factory = sqlite3.Row
 
     def list(self, limit):
-        transcripts = self.conn.execute(LIST_TRANSCRIPTS, dict(num=limit)).fetchall()
+        transcripts = self.conn.execute(_LIST_TRANSCRIPTS, dict(num=limit)).fetchall()
 
     def get(self, id):
         pass
@@ -103,15 +103,15 @@ class Cache:
     def put(self, r, transcript):
         with self.conn:
             container = r['file']
-            transcript_id = self.conn.execute(INSERT_TRANSCRIPT,
-                                              dict(filename=container.path.name, title=container.title, stream=r['stream'],
+            transcript_id = self.conn.execute(_INSERT_TRANSCRIPT,
+                                              dict(filename=container.path.name, title=container.title, stream=r['stream'] if 'stream' in r else container.default_stream,
                                                    confidence=transcript.confidence, model=transcript.model, date=transcript.at)).fetchone()['id']
 
             for i, c in enumerate(transcript.chapters):
-                cid = self.conn.execute(INSERT_CHAPTER_TRANSCRIPT,
+                cid = self.conn.execute(_INSERT_CHAPTER_TRANSCRIPT,
                                         dict(transcript_id=transcript_id, idx=i, start=c.start, end=c.end, title=c.title)).fetchone()['id']
-                self.conn.executemany(INSERT_SEGMENTS, [dict(chapter_id=cid, idx=i, **asdict(s)) for i, s in enumerate(c.segments)])
-                self.conn.executemany(INSERT_CHUNKS,   [dict(chapter_id=cid, idx=i, **asdict(k)) for i, k in enumerate(c.chunks)])
+                self.conn.executemany(_INSERT_SEGMENTS, [dict(chapter_id=cid, idx=i, **asdict(s)) for i, s in enumerate(c.segments)])
+                self.conn.executemany(_INSERT_CHUNKS,   [dict(chapter_id=cid, idx=i, **asdict(k)) for i, k in enumerate(c.chunks)])
 
     def close(self):
         self.conn.execute('PRAGMA optimize')

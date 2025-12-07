@@ -279,6 +279,7 @@ class Model:
     def _transcribe(self, jobs, num_chunks, batch_size, **model_args):
         main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0, leave=True)
 
+        total_length = sum(j['chapter'].end - j['chapter'].start for j in jobs)
         jobs_sorted = sorted(range(len(jobs)), key=lambda x: jobs[x]['chapter'].end - jobs[x]['chapter'].start, reverse=True)
 
         mel_queue = Queue()
@@ -294,7 +295,7 @@ class Model:
             results[idx] = ChapterTranscript(title=chapter.title, start=chapter.start, end=chapter.end, language=jobs[idx]['language'],
                                              chunks=active.chunks, segments=active.lines)
             active.bar.close()
-            main_bar.update(1)
+            main_bar.update((chapter.end - chapter.start)/total_length)
 
         def new_active(pending):
             idx = jobs_sorted[pending]
