@@ -245,7 +245,7 @@ if __name__ == "__main__":
     audio_action = make_input_option('audio')
     audio_option =  make_forward_option('audio')
     audio_group = sync_parser.add_argument_group("Audio options")
-    audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, help="path to an audio file")
+    audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, nargs='?', help="path to an audio file")
     audio_group.add_argument("--stream", type=int, action=audio_option, help="stream language or index with in the audio file to use")
     audio_group.add_argument("--ignore", nargs="*", action=audio_option, help="chapters to ignore while aligning and transcriping")
     audio_group.add_argument("--cache-entry", type=int, action=audio_option, help="cache id for the audio file")
@@ -310,15 +310,19 @@ if __name__ == "__main__":
     cacheless_streams, cached_streams = [], []
     for r in args.audio:
         if 'cache_entry' not in r:
+            if 'file' not in r:
+                raise Exception("audio option with neither a file nor a cache entry attached")
             cacheless_streams.append(r)
             continue
         entry_id = r['cache_entry']
         try:
             entry = cache.get(entry_id)
             cached_streams.append({**r, 'transcript': entry})
-        except:
+        except Exception as e:
+            if 'file' not in r:
+                raise Exception("audio option with neither a file nor a cache entry attached")
+            print(f"couldn't find cache entry {entry_id}: {str(e)}, transcribing {r['file'].path.name}")
             cacheless_streams.append(r)
-            print(f"couldn't find cache entry {entry_id}, transcribing {r[file].path.name}")
 
     if len(cacheless_streams):
         model = Model(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
@@ -328,4 +332,5 @@ if __name__ == "__main__":
         for r, t in zip(cacheless_streams, transcripts):
             cache.put(r, t)
             cached_streams.append({**r, 'transcript': t})
+    pprint(cached_streams[0]['transcript'].chapters[-2].segments)
 

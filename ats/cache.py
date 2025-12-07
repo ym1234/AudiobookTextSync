@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS transcript (
 CREATE TABLE IF NOT EXISTS chapter_transcript (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transcript_id INTEGER,
+    language,
     idx,
     title,
     start, end,
@@ -70,13 +71,16 @@ select * from transcript where id=:id;
 """
 
 _GET_CHAPTERS = """
-SELECT * FROM chapter_transcript WHERE transcript_id=:id ORDER BY idx ASC;
+SELECT * FROM chapter_transcript WHERE transcript_id=:transcript_id ORDER BY idx ASC;
 """
 
 _GET_CHUNKS = """
-SELECT * FROM segment WHERE chapter_id=:id ORDER BY idx ASC;
+SELECT * FROM chunk WHERE chapter_id=:chapter_id ORDER BY idx ASC;
 """
 
+_GET_SEGMENTS = """
+SELECT * FROM segment WHERE chapter_id=:chapter_id ORDER BY idx ASC;
+"""
 
 # adapter: list -> blob
 sqlite3.register_adapter(list, pickle.dumps)
@@ -85,6 +89,18 @@ sqlite3.register_converter("pickle", pickle.loads)
 
 sqlite3.register_adapter(datetime, lambda x: int(x.timestamp()))
 sqlite3.register_converter("datetime", lambda x: datetime.fromtimestamp(int(x)))
+
+
+@dataclass
+class CachedTranscript:
+    id: int
+    filename: str
+    title: str
+    stream: int
+    model: str
+    confidence: float
+    date: datetime
+    chapters: list
 
 class Cache:
     def __init__(self, database):
@@ -98,7 +114,37 @@ class Cache:
         transcripts = self.conn.execute(_LIST_TRANSCRIPTS, dict(num=limit)).fetchall()
 
     def get(self, id):
-        pass
+        transcript = dict(self.conn.execute(_GET_TRANSCRIPT, dict(id=id)).fetchone())
+        transcript = CachedTranscript(**transcript, chapters=[])
+        chapter_rows = self.conn.execute(_GET_CHAPTERS, dict(transcript_id=id)).fetchall()
+        chapters = []
+        for c in chapter_rows:
+            chapter = dict(c)
+            chapter_id = chapter.pop("id")
+            chapter.pop('transcript_id')
+            chapter.pop('idx')
+            if 'language' not in chapter:
+                chapter['language'] = '' # for now
+            chapter = ChapterTranscript(**chapter, chunks=[], segments=[])
+
+            chunk_rows =  self.conn.execute(_GET_CHUNKS, dict(chapter_id=chapter_id)).fetchall()
+            segment_rows = self.conn.execute(_GET_SEGMENTS, dict(chapter_id=chapter_id)).fetchall()
+            for cr in chunk_rows:
+                k = dict(cr)
+                k.pop('id')
+                k.pop('chapter_id')
+                k.pop('idx')
+                chapter.chunks.append(Chunk(**k))
+
+            for sr in segment_rows:
+                k = dict(sr)
+                k.pop('id')
+                k.pop('chapter_id')
+                k.pop('idx')
+                chapter.segments.append(SubLine(**k))
+
+            transcript.chapters.append(chapter)
+        return transcript
 
     def put(self, r, transcript):
         with self.conn:
@@ -109,7 +155,7 @@ class Cache:
 
             for i, c in enumerate(transcript.chapters):
                 cid = self.conn.execute(_INSERT_CHAPTER_TRANSCRIPT,
-                                        dict(transcript_id=transcript_id, idx=i, start=c.start, end=c.end, title=c.title)).fetchone()['id']
+                                        dict(transcript_id=transcript_id, idx=i, language=c.language, start=c.start, end=c.end, title=c.title)).fetchone()['id']
                 self.conn.executemany(_INSERT_SEGMENTS, [dict(chapter_id=cid, idx=i, **asdict(s)) for i, s in enumerate(c.segments)])
                 self.conn.executemany(_INSERT_CHUNKS,   [dict(chapter_id=cid, idx=i, **asdict(k)) for i, k in enumerate(c.chunks)])
 

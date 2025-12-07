@@ -98,9 +98,9 @@ class MelWorker(Thread):
 
     def run(self):
         while request := self.request_queue.get():
-            job = request
-            queue = job['queue']
-            process = self.start_process(job)
+            if not request: return
+            queue = request['queue']
+            process = self.start_process(request)
 
             self.lmax = -np.inf
 

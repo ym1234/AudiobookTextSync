@@ -277,15 +277,18 @@ class Model:
                 for i in range(len(requests))]
 
     def _transcribe(self, jobs, num_chunks, batch_size, **model_args):
-        main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0, leave=True)
+        main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0,
+                        bar_format="{l_bar}{bar}{n:3.2f}/{total:3.2f} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+                        leave=True)
 
         total_length = sum(j['chapter'].end - j['chapter'].start for j in jobs)
         jobs_sorted = sorted(range(len(jobs)), key=lambda x: jobs[x]['chapter'].end - jobs[x]['chapter'].start, reverse=True)
 
         mel_queue = Queue()
         for k in jobs_sorted: mel_queue.put(jobs[k])
-        # mel_queue.shutdown()
         mel_workers = [MelWorker(mel_queue, n_mels=self.n_mels, num_chunks=num_chunks) for _ in range(multiprocessing.cpu_count())]
+        # mel_queue.shutdown() # This is pretty new
+        for _ in mel_workers: mel_queue.put(None) # poison value
         for w in mel_workers: w.start()
 
         results = [None for _ in range(len(jobs))]
@@ -295,7 +298,7 @@ class Model:
             results[idx] = ChapterTranscript(title=chapter.title, start=chapter.start, end=chapter.end, language=jobs[idx]['language'],
                                              chunks=active.chunks, segments=active.lines)
             active.bar.close()
-            main_bar.update((chapter.end - chapter.start)/total_length)
+            main_bar.update((chapter.end - chapter.start)/total_length * len(jobs))
 
         def new_active(pending):
             idx = jobs_sorted[pending]
@@ -366,6 +369,7 @@ class Model:
                 a.buffer = a.buffer[:, 2*seek:]
                 a.bar.update(min(a.bar.total - a.bar.n, seek*0.02))
 
-        # for w in mel_workers: w.join()
+        for w in mel_workers: w.join()
+        main_bar.close()
         return results
 
