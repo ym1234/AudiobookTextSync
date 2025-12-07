@@ -60,7 +60,8 @@ class Container:
         duration = float(info['duration'] if 'duration' in info else info['format']['duration'])
         chapters = [Chapter(id=c['id'], title=c.get('tags', {}).get('title', ''), start=float(c['start_time']), end=float(c['end_time']))
                     for c in info['chapters']] or [Chapter(id=0, title=title, start=0, end=duration)] # Can chapters be discontinuous?
-        default_stream = [i for i, s in enumerate(info['streams']) if bool(s['disposition']['default'])][0]
+        default_streams = [i for i, s in enumerate(info['streams']) if bool(s['disposition']['default'])]
+        default_stream = default_streams[0] if len(default_streams) else 0
 
         self = cls(path=path, title=title, duration=duration, default_stream=default_stream, chapters=chapters, streams=[])
         for s in info['streams']:
