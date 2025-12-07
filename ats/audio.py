@@ -1,5 +1,4 @@
 import os
-import magic
 import pycountry
 import json
 import mimetypes
