@@ -23,8 +23,22 @@ class Container:
     streams: list
     chapters: list
 
+    def __getitem__(self, selector):
+        try:
+            selector = int(stream_selector)
+        except:
+            pass
+        if isinstance(stream_selector, int):
+            return self.streams[self.default_stream if selector == -1 else selector]
+        for s in self.streams:
+            if s.language == selector:
+                return s
+        raise KeyError("{self.title} doesn't have stream {selector}")
+
     @classmethod
     def from_file(cls, path):
+        if not isinstance(path, Path):
+            path = Path(path)
         cmd = [
             "ffprobe",
             "-hide_banner",
@@ -52,8 +66,8 @@ class Container:
         self = cls(path=path, title=title, duration=duration, default_stream=default_stream, chapters=chapters, streams=[])
         for s in info['streams']:
             alpha3 = s['tags'].get('language', None)
-            language = None if alpha3 is None else pycountry.languages.get(alpha_3=alpha3).alpha_2
-            stream = Stream(idx=s['index'], duration=s.get('duration', duration), language=language, parent=self)
+            language = pycountry.languages.get(alpha_3=alpha3).alpha_2 if alpha3 is not None else None
+            stream = Stream(idx=s['index'], duration=s.get('duration', duration), language=language)
             self.streams.append(stream)
         return self
 
@@ -69,4 +83,3 @@ class Stream:
     idx: int
     duration: float
     language: str
-    parent: Container

@@ -63,10 +63,10 @@ def _parse_srt_style(content, content_start, timing_idx):
     ps = []
     for n in content.split('\n\n')[content_start:]:
         if not n.strip(): continue
-        l = n.split('\n')
+        l = [o for i in n.strip().split('\n') if len(o := l.strip())]
         timing, content = l[timing_idx], '\n'.join(l[timing_idx+1:])
         start, end = _parse_timing(timing)
-        ps.append(SubLine(content=content, start=start, end=end, references=[]))
+        ps.append(SubLine(content=content, start=start, end=end))
     return ps
 
 @dataclass(eq=True, frozen=True)
@@ -174,6 +174,8 @@ class TextFile:
 
     @staticmethod
     def from_file(path):
+        if not isinstance(path, Path):
+            path = Path(path)
         ext = path.suffix[1:]
         try:
             cls = SUPPORTED_FORMATS[ext]

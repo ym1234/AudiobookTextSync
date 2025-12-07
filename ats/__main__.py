@@ -1,5 +1,9 @@
 from ats.lang import get_lang
+from pprint import pprint
 from tqdm.auto import tqdm
+from ats.args import make_forward_option, make_input_option
+import os
+import pickle
 
 def joinuntil(a, n):
     l, end = 0, 0
@@ -201,41 +205,9 @@ def whisper(audio, text, language, output_dir, output_format, file_overwrite,
                     o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
 
 
-def collect_file(cls, path):
-    if path.is_file():
-        try:
-            return cls.from_file(path)
-        except Exception as e:
-            return str(e)
-    if path.exists():
-        return f"{str(path)} is not a file"
-    return f"{str(path)} doesn't exist"
 
-def collect_files(cls, paths):
-    return [collect_file(cls, p) for p in paths]
-
-def get_stream(audio, selector):
-    try:
-        selector_num = int(selector)
-        if selector_num == -1:
-            return audio.streams[audio.default_stream]
-        return audio.streams[selector_num]
-    except:
-        pass
-    for s in audio.streams:
-        if s.language == selector:
-            return s
-    return f"{audio.title} doesn't have stream {selector}"
-
-def resolve_stream(stream_numbers, a, i):
-    if isinstance(a, str):
-        return a
-    if i < len(stream_numbers):
-        return get_stream(a.streams, stream_numbers[i])
-    try:
-        return a.streams[a.default_stream]
-    except:
-        return f"{a.title} broken container?"
+def cache_main(args):
+    pass
 
 if __name__ == "__main__":
     import argparse
@@ -251,101 +223,109 @@ if __name__ == "__main__":
 
 
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
-    parser.add_argument("--text", type=Path, nargs='+', help="path to the script file")
-    parser.add_argument("--stream", default=[], nargs='+', help="select audio streams, uses the container's default stream if not specified")
+    subparsers = parser.add_subparsers(help="Commands", dest="command")
 
-    # group = parser.add_mutually_exclusive_group(required=True)
-    parser.add_argument("--audio", type=Path, nargs='+', help="list of audio files to process, mutually exclusive with --cache-entry")
-    parser.add_argument("--cache-entry", type=int, nargs='+', help="list of cache entries, mutually exclusive with --audio, incompatible with --stream")
+    sync_parser = subparsers.add_parser('sync', help="Sync!", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    sync_parser.add_argument("--cache-path", type=Path, default="TranscriptionCache.sqlite", help="path to cache database")
+    sync_parser.add_argument("--progress", default=True, action=argparse.BooleanOptionalAction,  help="progress bar on/off")
+    sync_parser.add_argument("--overwrite", default=False, action=argparse.BooleanOptionalAction,  help="overwrite any destination files")
 
-    parser.add_argument("--language", default=None, help="language of the script and audio")
+    sync_parser.add_argument("--output-dir", default=u'.', type=Path, help="output directory")
+    sync_parser.add_argument("--output-format", default='srt', choices=['srt', 'vtt', 'epub'], help="output format, epub will create an epub file with a media overlay")
 
-    parser.add_argument("--progress", default=True,  help="progress bar on/off", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--overwrite", default=False,  help="overwrite any destination files", action=argparse.BooleanOptionalAction)
+    global_option =  make_forward_option('')
+    sync_parser.add_argument("--language", action=global_option, help="language of the script and audio")
 
-    parser.add_argument("--output-dir", default=u'.', type=Path, help="output directory")
-    parser.add_argument("--output-format", default='srt', help="output format currently only supports vtt and srt")
+    text_action = make_input_option('text')
+    text_option =  make_forward_option('text')
 
-    parser.add_argument("--cache", type=Path, default="TranscriptionCache.sqlite", help="path to cache database")
-    parser.add_argument("--cache-list", default=False, help="print cache entries and exit", action=argparse.BooleanOptionalAction)
+    text_group = sync_parser.add_argument_group("Text options")
+    text_group.add_argument("--text", type=TextFile.from_file, action=text_action, required=True, help="path to an epub or text file")
 
-    mg = parser.add_argument_group("Model options")
-    mg.add_argument("--model", default="tiny", help=f"whisper model to use, can be a huggingface path or one of {available_models()}")
-    mg.add_argument("--device", default='auto', help="device to do inference on")
-    mg.add_argument("--local-files-only", default=False, help="Don't download models", action=argparse.BooleanOptionalAction)
-    mg.add_argument('--quantize', default=True, help="use fp16 on gpu or int8 on cpu", action=argparse.BooleanOptionalAction)
-    mg.add_argument('--download-root', type=str, default=None, help="directory to download the model to")
-    mg.add_argument('--device-index', type=int, default=0, help="device to load the model on")
+    audio_action = make_input_option('audio')
+    audio_option =  make_forward_option('audio')
+    audio_group = sync_parser.add_argument_group("Audio options")
+    audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, help="path to an audio file")
+    audio_group.add_argument("--stream", type=int, action=audio_option, help="stream language or index with in the audio file to use")
+    audio_group.add_argument("--ignore", nargs="*", action=audio_option, help="chapters to ignore while aligning and transcriping")
+    audio_group.add_argument("--cache-entry", type=int, action=audio_option, help="cache id for the audio file")
 
-    ag = parser.add_argument_group("Aligner options")
-    ag.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
-    ag.add_argument("--prepend_punctuations", type=str, default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
-    ag.add_argument("--append_punctuations", type=str, default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
-    ag.add_argument("--nopend_punctuations", type=str, default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
+    model_group = sync_parser.add_argument_group("Model options")
+    model_group.add_argument("--model", default="tiny", help=f"whisper model to use, can be a huggingface path or one of {available_models()}")
+    model_group.add_argument("--device", default='auto', help="device to do inference on")
+    model_group.add_argument("--local-files-only", default=False, action=argparse.BooleanOptionalAction, help="Don't download models")
+    model_group.add_argument('--quantize', default=True, action=argparse.BooleanOptionalAction, help="use fp16 on gpu or int8 on cpu")
+    model_group.add_argument('--download-root', default=None, help="directory to download the model to")
+    model_group.add_argument('--device-index', type=int, default=0, help="device to load the model on")
 
-    tg = parser.add_argument_group("Transcription options")
-    tg.add_argument("--num-chunks", type=int, default=10, help="todo")
-    tg.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
-    tg.add_argument("--beam-size", type=int, default=5, help="number of beams in beam search, only applicable when temperature is zero")
-    tg.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
-    tg.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
-    tg.add_argument("--use-stream-language", type=bool, action=argparse.BooleanOptionalAction)
-    tg.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
+    aligner_group = sync_parser.add_argument_group("Aligner options")
+    aligner_group.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
+    aligner_group.add_argument("--prepend_punctuations", default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
+    aligner_group.add_argument("--append_punctuations", default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
+    aligner_group.add_argument("--nopend_punctuations", default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
 
-    tg.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
-    tg.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
-    tg.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
+    transcription_group = sync_parser.add_argument_group("Transcription options")
+    transcription_group.add_argument("--use-stream-language", type=bool, action=argparse.BooleanOptionalAction)
 
-    tg.add_argument("--suppress-blank", default=True, help="suppress blank tokens at the start of sampling", action=argparse.BooleanOptionalAction)
-    tg.add_argument("--suppress-tokens", type=str, default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
+    transcription_group.add_argument("--num-chunks", type=int, default=10, help="todo")
+    transcription_group.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
+    transcription_group.add_argument("--beam-size", type=int, default=5, help="number of beams in beam search, only applicable when temperature is zero")
+    transcription_group.add_argument("--patience", type=float, default=1, help="optional patience value to use in beam decoding, as in https://arxiv.org/abs/2204.05424, the default (1.0) is equivalent to conventional beam search")
+    transcription_group.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
+    transcription_group.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
-    tg.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
-    tg.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
-    tg.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
-    tg.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
+    transcription_group.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
+    transcription_group.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
+    transcription_group.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
+
+    transcription_group.add_argument("--suppress-blank", default=True, action=argparse.BooleanOptionalAction, help="suppress blank tokens at the start of sampling")
+    transcription_group.add_argument("--suppress-tokens", default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
+
+    transcription_group.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
+    transcription_group.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
+    transcription_group.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
+    transcription_group.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
+
+    cache_parser = subparsers.add_parser('cache', help='manage the cache')
+
+    cache_parser.add_argument("--cache-path", type=Path, default="TranscriptionCache.sqlite", help="path to cache database")
+    cache_parser.add_argument('--list', help="list all entries in the cache")
+    cache_parser.add_argument('--remove', type=int, nargs="+", help="delete cache entries")
 
     args = parser.parse_args()
-    tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.progress)
 
-    cache = Cache(args.cache)
-    if args.cache_list:
-        cache.list()
+    cache = Cache(args.cache_path)
+    if args.command == 'cache':
+        cache_main(args, cache)
         exit(0)
 
-    ao = {a.dest: getattr(args, a.dest) for a in ag._group_actions}
+    tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.progress)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    ao = {a.dest: getattr(args, a.dest) for a in aligner_group._group_actions}
 
     print("Loading...")
-    text = collect_files(TextFile, args.text)
-    if len(text_errors := [t for t in text if isinstance(t, str)]):
-        print('\n'.join(text_errors))
-        exit(1)
+    text = args.text
+    # pprint(text)
 
-    if args.audio is not None:
-        audio = collect_files(Container, args.audio)
-        streams = [resolve_stream(args.stream, a, i) for i, a in enumerate(audio)]
-        if len(stream_errors := [s for s in streams if isinstance(s, str)]):
-            print('\n'.join(stream_errors))
-            exit(1)
+    cacheless_streams, cached_streams = [], []
+    for r in args.audio:
+        if 'cache_entry' not in r:
+            cacheless_streams.append(r)
+            continue
+        entry_id = r['cache_entry']
+        try:
+            entry = cache.get(entry_id)
+            cached_streams.append({**r, 'transcript': entry})
+        except:
+            cacheless_streams.append(r)
+            print(f"couldn't find cache entry {entry_id}, transcribing {r[file].path.name}")
 
-        if not args.overwrite:
-            exist = {a for a in streams if (args.output_dir / (a.parent.path.stem + '.' + args.output_format)).exists()}
-            streams -= exist
-            print('\n'.join([f"{str(a.parent.path.stem + '.' + arg.soutput_format)} already exists, skipping" for a in exist]))
-
-        if not len(streams):
-            print("No work to do...")
-            exit(0)
-
-        model = Model(**{a.dest: getattr(args, a.dest) for a in mg._group_actions})
+    if len(cacheless_streams):
+        model = Model(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
         print(f"Using device: {model.device} with {model.compute_type} compute.")
-        transcripts = model.transcribe(streams, language=args.language, **{a.dest: getattr(args, a.dest) for a in tg._group_actions})
-        for stream, transcript in zip(streams, transcripts):
-            cache.put(stream, transcript, args.model)
-    elif args.cache_entry is not None:
-        pass
-    else:
-        pass
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
+        transcripts = model.transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
+        for r, t in zip(cacheless_streams, transcript):
+            cache.put(r, transcript)
+            cached_streams.append({**r, 'transcript': t})
 
