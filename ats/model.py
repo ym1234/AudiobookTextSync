@@ -316,9 +316,8 @@ class Model:
             while i < len(active):
                 a = active[i]
                 if not a.done and a.buffer.shape[-1] < 3000:
-                    buf, stderr, end = jobs[a.idx]['queue'].get()
+                    buf, end = jobs[a.idx]['queue'].get()
                     a.buffer = cnp.concatenate((a.buffer, buf), axis=-1)
-                    if stderr: tqdm.write(str(stderr))
                     if end: a.done = True
                 elif a.buffer.shape[-1] == 0:
                     finalize_transcript(a)

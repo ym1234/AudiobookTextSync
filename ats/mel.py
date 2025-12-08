@@ -3,13 +3,7 @@ from ats.np import np as cnp, stft
 from functools import cache
 from threading import Thread
 from subprocess import Popen, run, CalledProcessError, PIPE
-
-try:
-    import cupy as cp
-    from cupyx.scipy import signal
-    has_cupy = True
-except ImportError:
-    has_cupy = False
+from tqdm.auto import tqdm
 
 SAMPLE_RATE = 16000
 N_FFT = 400
@@ -110,7 +104,7 @@ class MelWorker(Thread):
 
             stderr = b""
             while nread//4 >= len(buffer):
-                queue.put((self.mel(cnp.asarray(buffer)), b'', False))
+                queue.put((self.mel(cnp.asarray(buffer)), False))
                 buffer[:N_FFT-HOP_LENGTH] = buffer[-N_FFT+HOP_LENGTH:]
                 nread = process.stdout.readinto(buffer[N_FFT-HOP_LENGTH:]) + 4*(N_FFT-HOP_LENGTH)
                 if k := process.stderr.read(0):
@@ -121,8 +115,9 @@ class MelWorker(Thread):
             if leftover > len(buffer):
                 buffer = np.pad(buffer, (0, leftover-len(buffer)))
             buffer = np.pad(buffer, (0, leftover), mode='reflect')
-            stderr = stderr + process.stderr.read()
-            queue.put((self.mel(cnp.asarray(buffer)), stderr, True))
+            queue.put((self.mel(cnp.asarray(buffer)), True))
+
+            tqdm.write(stderr + process.stderr.read())
             self.ret = process.wait()
 
     def mel(self, buffer):
