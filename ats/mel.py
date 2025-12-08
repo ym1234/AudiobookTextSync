@@ -118,7 +118,8 @@ class MelWorker(Thread):
             queue.put((self.mel(cnp.asarray(buffer)), True))
 
             try:
-                tqdm.write((stderr + process.stderr.read()).decode('utf8'))
+                if stderr:
+                    tqdm.write((stderr + process.stderr.read()).decode('utf8'))
                 process.wait()
             except Exception as e:
                 tqdm.write(str(e))

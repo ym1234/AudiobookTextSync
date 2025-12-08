@@ -1,7 +1,7 @@
 import numpy as np
 try:
     import cupy
-    import cupyx
+    import cupyx.scipy.signal # they fail to export this in the cuda12 package, uggghhhh so much wasted time
     if cupy.cuda.is_available():
         no_cuda = False
         np = cupy
@@ -9,9 +9,6 @@ try:
         no_cuda = True
 except:
     no_cuda = True
-
-print("Using: ", "numpy" if no_cuda else "cupy")
-
 
 def stft(buf, window, sample_rate, nfft, hoplength):
     if not no_cuda:
