@@ -117,8 +117,11 @@ class MelWorker(Thread):
             buffer = np.pad(buffer, (0, leftover), mode='reflect')
             queue.put((self.mel(cnp.asarray(buffer)), True))
 
-            tqdm.write(stderr + process.stderr.read())
-            self.ret = process.wait()
+            try:
+                tqdm.write((stderr + process.stderr.read()).decode('utf8'))
+                process.wait()
+            except Exception as e:
+                tqdm.write(str(e))
 
     def mel(self, buffer):
         s = stft(buffer, self.window, SAMPLE_RATE, N_FFT, HOP_LENGTH)[:(N_FFT >> 1) + 1]
