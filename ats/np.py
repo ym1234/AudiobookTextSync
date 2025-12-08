@@ -13,7 +13,7 @@ except:
 def stft(buf, window, sample_rate, nfft, hoplength):
     if not no_cuda:
         stft = cupyx.scipy.signal.stft(buf, fs=sample_rate, window=window, nperseg=nfft,
-                                    nooverlap=nfft-hoplength, nfft=nfft, return_onesided=False)[-1]
+                                    noverlap=nfft-hoplength, nfft=nfft, return_onesided=False)[-1]
         return stft[:, :-1]
 
     chunks = [buf[i:i+nfft] for i in range(0, len(buf), hoplength)]# if len(buf[i:i+N_FFT]) == N_FFT]
