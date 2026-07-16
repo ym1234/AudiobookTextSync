@@ -25,7 +25,7 @@ def _import_c2():
     finder = importlib.machinery.PathFinder()
     c2spec = finder.find_spec('ctranslate2')
     if c2spec is None:
-        raise ModuleNotFoundError('c2translate2')
+        raise ModuleNotFoundError('ctranslate2')
 
     if sys.platform == "win32":
         import ctypes
@@ -154,8 +154,6 @@ class Tokenizer:
 
         return words, word_tokens
 
-
-
 @dataclass
 class _TranscriptionState:
     idx: int
@@ -231,8 +229,8 @@ class Model:
                 decode_args = dict(beam_size=1, sampling_temperature=t, num_hypotheses=num_hypotheses)
             else:
                 decode_args = dict(beam_size=beam_size, patience=patience)
-            if i != 0:
-                tqdm.write(f"DECODING FAILED!! {i}")
+            # if i != 0:
+            #     tqdm.write(f"DECODING FAILED!! {i}")
             rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
                                      length_penalty=0, **decode_args, **model_args)
             for i, r in enumerate(rs):
@@ -257,11 +255,12 @@ class Model:
         jobs = []
         for r in requests:
             file = r['file']
-            stream = file.streams[r['stream']] if 'stream' in r else file.streams[file.default_stream]
+            stream = file[r['stream']] if 'stream' in r else file[file.default_stream]
             language = r['language'] if 'language' in r else stream.language if use_stream_language else None
             language = self.tokenizer.token_to_id("<|" + language + "|>") if language is not None else None  # gets filled in later by whisper
             for c in file.chapters:
-                if c in r.get('ignore', {}):
+                ignore = r.get('ignore', {})
+                if str(c.id) in ignore or c.title in ignore:
                     continue
                 jobs.append(dict(path=file.path, stream=stream.idx, language=language, chapter=c, queue=Queue(maxsize=1)))
 

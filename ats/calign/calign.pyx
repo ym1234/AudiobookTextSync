@@ -1,5 +1,7 @@
 cimport cython
-from libc.stdint cimport int64_t, uint32_t, int32_t
+from libc.stdint cimport int8_t, int16_t, int32_t, int64_t, uint8_t, uint16_t, uint32_t, uint64_t
+from libc.stdio cimport printf
+from libc.string cimport memcpy
 import mmap
 
 import numpy as np
@@ -38,6 +40,15 @@ cdef extern from "impl32.h":
     )
     int maxsum32(__m256i *, const __m256i *, int)
 
+
+cdef extern from "avx2.c":
+    int64_t do_the_thing(
+        uint8_t *qseq, int64_t unaligned, int64_t qlen,
+        uint8_t *tseq, int64_t tlen,
+        int8_t match, int8_t mismatch,
+        int8_t gapo, int8_t gape
+    )
+
 cdef inline int64_t _align(int64_t n, int64_t alignment) noexcept:
     # assert alignment > 1, "alignment < 0" # remove noexcept if you enable this
     cdef int64_t a = alignment - 1
@@ -45,6 +56,7 @@ cdef inline int64_t _align(int64_t n, int64_t alignment) noexcept:
 
 cdef class BumpAllocator:
     cdef char *mem
+    file: mmap.mmap
     cdef int64_t allocsize
     cdef int64_t cursor
 
@@ -54,13 +66,9 @@ cdef class BumpAllocator:
     def __init__(self, size: int):
         cdef int64_t allocsize = _align(size,  2*1024*1024)
         self.file = mmap.mmap(-1, allocsize)
-        self.mem = <char *>self.file
-        # cdef void *chunk = mman.mmap(NULL, allocsize, mman.PROT_READ | mman.PROT_WRITE, mman.MAP_ANONYMOUS | mman.MAP_PRIVATE, -1, 0)
-        # mman.madvise(chunk, allocsize, mman.MADV_HUGEPAGE)
-        # if chunk == <void*> -1:
-        #     raise MemoryError("mmap -1")
+        cdef char[:] buf = self.file
+        self.mem = &buf[0]
 
-        # self.mem = <char *>chunk
         self.cursor = 0
         self.allocsize = allocsize
 
@@ -90,6 +98,9 @@ cdef class BumpAllocator:
         self.cursor = 0
         self.checkpoint = 0
 
+    # def size(self):
+    #     return self.cursor
+
     def __enter__(self):
         self.save()
         return self
@@ -111,6 +122,23 @@ cdef class Aligner:
         self.gap_open = gap_open
         self.gap_extend = gap_extend
         self.allocator = BumpAllocator(memsize)
+
+
+    def score_difference_recurrence(self, query, database):
+        cdef const cnp.uint8_t[::1] q = np.frombuffer(query.encode('utf-8'), dtype=np.uint8) if isinstance(query, str) else  query.astype(np.uint8)
+        cdef const cnp.uint8_t[::1] d = np.frombuffer(database.encode('utf-8'), dtype=np.uint8) if isinstance(database, str) else database.astype(np.uint8)
+        cdef int64_t lq = len(q)
+        cdef int64_t ld = len(d)
+
+        cdef int64_t aligned = _align(lq, 32)
+        cdef int64_t stride = aligned // 32
+
+        cdef int64_t bufsize = _align(aligned * sizeof(int8_t), 64)
+        with self.allocator as allocator:
+            buf: cython.pointer(uint8_t) = <uint8_t *> self.allocator.alloc(bufsize)
+            memcpy(buf, &q[0], sizeof(int8_t) * lq)
+            ret: int64_t = do_the_thing(buf, lq, aligned, &d[0], ld,  self.match, self.mismatch, self.gap_open, self.gap_extend)
+            return ret
 
     @cython.boundscheck(False)
     @cython.wraparound(False)

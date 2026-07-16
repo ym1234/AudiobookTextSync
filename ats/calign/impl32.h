@@ -274,8 +274,8 @@ int32_t trace32(
   int64_t tracepos = *tracelen;
 
 #define TRACEAPPEND do { \
-    traceback[tracepos++] = offsetx + lx - 1; \
-    traceback[tracepos++] = offsety + ly - 1; \
+    traceback[tracepos++] = offsetx + lx; \
+    traceback[tracepos++] = offsety + ly; \
   } while(0);
 
   #define max(a, b) ((b) > (a) ? (b) : (a))
@@ -299,14 +299,14 @@ int32_t trace32(
 
     if (curarr == 0) {
       int32_t score = query[lx-1] == database[ly-1] ? match : mismatch;
-      if (cHcx == cEcx) {
-        curarr = 1;
-      } else if (cHcx == cFcx) {
-        curarr = 2;
-      } else if (cHcx == (pHpx + score)) {
+      if (cHcx == (pHpx + score)) {
         TRACEAPPEND;
         lx -= 1;
         ly -= 1;
+      } else if (cHcx == cEcx) {
+        curarr = 1;
+      } else if (cHcx == cFcx) {
+        curarr = 2;
       } else {
         printf("WTF cx %d, ly %ld, chcx %d, chpx %d, score %d\n", cx, ly, cHcx, cHpx, score);
         exit(-1);
@@ -334,6 +334,7 @@ int32_t trace32(
       TRACEAPPEND;
       ly -= 1;
   }
+  TRACEAPPEND;
 
 #undef TRACEAPPEND
 

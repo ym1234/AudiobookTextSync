@@ -1,95 +1,38 @@
 import numpy as np
+from tqdm.auto import tqdm
+import unicodedata
 
-def align_sub(coords1, coords2, ends1, ends2):
-    ends2idx = np.searchsorted(coords2, ends2)
-    segstart, segend, prev, ret = 0, 0, 0, []
-    for k in ends2idx[:-1]:
-        cend = coords1[k]
-        while cend >= ends1[segend]:
-            segend += 1
-        f = max(int(cend-ends1[segend-1]), 0)
-        ret.append([segstart, segend, prev, f])
-        segstart, prev = segend-1, ret[-1][-1]
-    ret.append([segstart, ends1.shape[-1]-1, prev, -1])
-    return ret
+def merge_punctuation(text, segment_ends, indices, prepend, append):
+    for i in range(1, len(indices)-1):
+        while indices[i] not in segment_ends and indices[i] > 0 and text[indices[i]-1] in prepend:
+            indices[i] -= 1
 
+    for i in range(1, len(indices)):
+        while indices[i] not in segment_ends and indices[i] < len(text) and text[indices[i]] in append:
+            indices[i] += 1
 
-# # """"""Heuristics"""""""
-# # Move to lang?
-# def fix_punc(text, segments, prepend, append, nopend):
-#     for l, s in enumerate(segments):
-#         if not s: continue
-#         t = text[l]
-#         for p, f in zip(s, s[1:] + [s[-1]]):
-#             connected = f[0] == p[1]
-#             loop = 0
-#             while True:
-#                 if loop > 20:
-#                     break
-#                 if p[1] < len(t) and t[p[1]] in append:
-#                     p[1] += 1
-#                 elif t[p[1]-1] in prepend:
-#                     p[1] -= 1
-#                 elif (p[1] > 0 and t[p[1]-1] in nopend) or (p[1] < len(t) and t[p[1]] in nopend) or (p[1] < len(t)-1 and t[p[1]+1] in nopend):
-#                     start, end = p[1]-1, p[1]
-#                     if  p[1] < len(t)-1 and (t[p[1]+1] in nopend and 0x4e00 > ord(t[p[1]]) or ord(t[p[1]]) > 0x9faf): # Bail out if we end on a kanji
-#                         end += 1
+def align_sub(transcript, text, transcript_joined, text_joined, text_indices, transcript_indices, prepend, append):
+    transcript_lens = [0] + [len(t) for t in transcript]
 
-#                     while start > 0 and t[start] in nopend:
-#                         start -= 1
-#                     while end < len(t)-1 and t[end] in nopend:
-#                         end += 1
+    text_ends_idx = np.searchsorted(transcript_indices, np.cumsum(transcript_lens))
+    text_ends = text_indices[text_ends_idx]
 
+    text_lens = [0] + [len(t) for t in text]
+    text_lens_cum = np.cumsum(text_lens)
+    merge_punctuation(text_joined, text_lens_cum, text_ends,
+                      prepend, append)
 
-#                     if t[start] in prepend:
-#                         if p[1] == start:
-#                             break
-#                         p[1] = start
-#                     elif t[start] in append:
-#                         if p[1] == start+1:
-#                             break
-#                         p[1] = start+1
-#                     elif end < len(t) and t[end] in prepend:
-#                         if p[1] == end:
-#                             break
-#                         p[1] = end
-#                     elif end < len(t) and t[end] in append:
-#                         if p[1] == end+1:
-#                             break
-#                         p[1] = end+1
-#                     else:
-#                         break
-#                 else:
-#                     break
-#                 loop += 1
-#             if connected: f[0] = p[1]
+    segments_pos = np.clip(np.searchsorted(text_lens_cum, text_ends)-1, min=0)
+    offsets = text_ends - text_lens_cum[segments_pos]
 
-
-# def fix(lang, original, edited, segments):
-#     for s in segments:
-#         for i in range(2):
-#             t, to = s[i] - i, s[i+2]
-#             if to == -1:
-#                 s[i+2] = 2*len(original[t].text()) # hack lol
-#                 continue
-#             if to == 0:
-#                 continue
-#             o, e = lang.translate(original[t].text()), edited[t]
-#             oi = 0
-#             for ei in range(len(e)):
-#                 while oi < len(o) and e[ei] != o[oi]:
-#                     oi += 1
-#                 while oi < len(o) and e[ei] == o[oi]:
-#                     oi += 1
-#                 if ei == to:
-#                     to = oi-1
-#                     break
-#             s[i+2] = to
-
+    total = np.concatenate([a.reshape(-1, 1) for a in [segments_pos[:-1], segments_pos[1:], offsets[:-1], offsets[1:]]],
+                           axis=1)
+    return total
 
 # This is structured like this to deal with references later
-def align(aligner, lang, transcript, text, references, prepend, append, nopend):
+def align(aligner, lang, transcript, text, references, prepend, append):
     transcript_clean = [lang.clean(i.text()) for i in transcript]
+    # transcript_clean = [i.text() for i in transcript]
     transcript_joined = ''.join(transcript_clean)
 
     def inner(text):
@@ -98,13 +41,13 @@ def align(aligner, lang, transcript, text, references, prepend, append, nopend):
 
         if not len(text_joined) or not len(transcript_joined): return []
         score, coords = aligner.hirschberg(text_joined, transcript_joined)
-        # score2 = aligner.similarity(text_joined, transcript_joined)
-        # print(score, score2)
-        segments = align_sub(coords[0], coords[1], np.cumsum([0]+[len(x) for x in text_clean]), np.cumsum([len(x) for x in transcript_clean]))
+
+        segments = align_sub(transcript_clean, text_clean,
+                             transcript_joined, text_joined,
+                             coords[0], coords[1],
+                             prepend, append)
         del coords
 
-        # fix(lang, text, text_clean, segments)
-        # fix_punc(text, segments, prepend, append, nopend)
         return segments
 
     return inner(text), [] #references

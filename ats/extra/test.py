@@ -1,20 +1,25 @@
 from ats import calign
 import numpy as np
 from ats import extra
-import parasail
-match = 3
-mismatch = 2
-gap_open = 5
-gap_extend = 2
+# import parasail
+# match = 3
+# mismatch = 2
+# gap_open = 5
+# gap_extend = 2
 
-qfactor = 500 # 10000
-dfactor = 500 # 20000
-query = "Hello world"*qfactor
-database = "This hello"*dfactor
-print(len(query), len(database))
-rc = calign.pyhirschberg(query, database, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_extend=-gap_extend)
-print(np.maximum(0, rc[:, :500]))
-print(rc.shape)
+match = 1
+mismatch = 1
+gap_open = 1
+gap_extend = 1
+
+# qfactor = 500 # 10000
+# dfactor = 500 # 20000
+# query = "Hello world"*qfactor
+# database = "This hello"*dfactor
+# print(len(query), len(database))
+# rc = calign.pyhirschberg(query, database, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_extend=-gap_extend)
+# print(np.maximum(0, rc[:, :500]))
+# print(rc.shape)
 
 
 def do_parasail_scan(x, y):
@@ -36,6 +41,7 @@ def do_parasail_table(x, y):
 
 def nw_full(x, y, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_extend=-gap_extend):
     lx, ly = len(x), len(y)
+    # gap_open += gap_extend # for now
 
     h = np.zeros((lx+1, ly+1))
     e = np.full((lx+1, ly+1), fill_value=-np.inf)
@@ -56,9 +62,38 @@ def nw_full(x, y, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_exten
             f[i, j] = max(f[i-1, j]+gap_extend, h[i-1, j]+gap_open)
             h[i, j] = max(e[i, j], f[i, j], h[i-1, j-1]+score)
 
-    return f
+    return h[-1, -1]
 
-print(extra.chirschberg(query, database, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_extend=-gap_extend)[:, :500])
+def lastcol(x, y, match, mismatch, gap_open, gap_extend):
+    lx, ly = len(x), len(y)
+
+    h = np.full(lx+1, -np.inf)
+    e = np.full(lx+1, -np.inf)
+    f = np.full(lx+1, -np.inf)
+
+    h[0] = 0
+
+    # init first column (j = 0)
+    for i in range(1, lx+1):
+        f[i] = max(f[i-1] + gap_extend, h[i-1] + gap_open)
+        h[i] = f[i]
+
+    for j in range(1, ly+1):
+        h_prev = h[0]
+        f[0] = -np.inf
+        h[0] = gap_open + (j-1) * gap_extend
+
+        for i in range(1, lx+1):
+            score = match if x[i-1] == y[j-1] else mismatch
+
+            e[i] = max(e[i] + gap_extend, h[i] + gap_open)
+            f[i] = max(f[i-1] + gap_extend, h[i-1] + gap_open)
+
+            h_prev, h[i] = h[i], max(h_prev + score, e[i], f[i])
+
+    return h[-1]
+
+# print(extra.chirschberg(query, database, match=match, mismatch=-mismatch, gap_open=-gap_open, gap_extend=-gap_extend)[:, :500])
 # rpa = do_parasail_table(query, database)
 # print(rpa)
 # print(rpa.shape)

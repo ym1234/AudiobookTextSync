@@ -5,7 +5,6 @@ import mimetypes
 import numpy as np
 
 from tqdm.auto import tqdm
-from ats.mel import SAMPLE_RATE, F32LE
 from subprocess import run, CalledProcessError, PIPE
 
 from dataclasses import dataclass
@@ -33,6 +32,13 @@ class Container:
             if s.language == selector:
                 return s
         raise KeyError("{self.title} doesn't have stream {selector}")
+
+    def __contains__(self, selector):
+        try:
+            self[selector]
+            return True
+        except:
+            return False
 
     @classmethod
     def from_file(cls, path):

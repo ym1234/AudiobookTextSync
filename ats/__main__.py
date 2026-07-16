@@ -2,6 +2,7 @@ from ats.lang import get_lang
 from pprint import pprint
 from tqdm.auto import tqdm
 from ats.args import make_forward_option, make_input_option
+import time
 import os
 import pickle
 
@@ -12,18 +13,20 @@ def joinuntil(a, n):
         end += 1
     return ''.join(seg.text() for seg in a[:end])
 
-def match_start(aligner, audio, text, prepend, append, nopend):
+def match_start(aligner, audio, text, prepend, append):
     ats, sta = {}, {}
     textcache = {}
-    for ai, afile in enumerate(tqdm(audio)):
+    for ai, r in enumerate(tqdm(audio)):
+        afile = r['transcript']
         for i, ach in enumerate(tqdm(afile.chapters)):
             if (ai, i) in ats: continue
 
-            lang = get_lang(ach.language, prepend, append, nopend)
+            lang = get_lang(ach.language, prepend, append)
             acontent = joinuntil(ach.segments, 2000)
 
             best = (-1, -1, 0)
-            for ti, tfile in enumerate(text):
+            for ti, tr in enumerate(text):
+                tfile = tr['file']
                 for j, tch in enumerate(tfile.chapters):
                     if (ti, j) in sta: continue
 
@@ -48,7 +51,8 @@ def match_start(aligner, audio, text, prepend, append, nopend):
 # Batch = namedtuple('Batch', ['book', 'start', 'text', 'score'])
 def expand_matches(audio, text, ats, sta):
     batches = []
-    for ai, a in enumerate(audio):
+    for ai, r in enumerate(audio):
+        a = r['transcript']
         batch = []
 
         i = 0
@@ -59,11 +63,13 @@ def expand_matches(audio, text, ats, sta):
                 i = aend
                 continue
             while aend < len(a.chapters) and (ai, aend) not in ats:
+            # while aend < len(a.chapters) and (ai, aend) not in ats and str(audio[ai]['file'].chapters[aend].id) not in audio[ai]['ignore'] and audio[ai]['file'].chapters[aend].title not in audio[ai]['ignore']:
                 aend += 1
 
             book, tstart, score = ats[ai, astart]
             tend = tstart+1
-            while tend < len(text[book].chapters) and (book, tend) not in sta:
+            while tend < len(text[book]['file'].chapters) and (book, tend) not in sta:
+            # while tend < len(text[book]['file'].chapters) and (book, tend) not in sta and str(text[book]['file'].chapters[tend].idx) not in text[book]['ignore'] and text[book]['file'].chapters[tend].title not in text[book]['ignore']:
                 tend += 1
             batch.append((astart, aend, book, tstart, tend, score))
             i = aend
@@ -72,37 +78,52 @@ def expand_matches(audio, text, ats, sta):
 
 
 def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-', sep3='::'):
+    try:
+        columns, _ = os.get_terminal_size()
+    except:
+        return
+
     from wcwidth import wcswidth
+    def truncate(t, l, e):
+        k = l - len(e)
+        a, o = 0, ""
+        for c in t:
+            a += wcswidth(c)
+            if a >= k:
+                break
+            o += c
+        return o + e
 
     rows = [1, ["Audio", "Text", "Score"]]
     width = [wcswidth(h) for h in rows[-1]]
+    elide = [True, True, False]
 
     for ai, batch in enumerate(batches):
-        use_audio_header = len(audio[ai].chapters) > 1
+        use_audio_header = len(audio[ai]['transcript'].chapters) > 1
 
         text_unique = len(set(b[-4] for b in batch)) == 1
         use_text_header = text_unique and (batch[0][-2] - batch[0][-3]) > 3
 
         if use_audio_header or use_text_header:
             rows.append(1)
-            rows.append([audio[ai].title, '', ''])
+            rows.append([audio[ai]['transcript'].title, '', ''])
             use_audio_header = True
             if text_unique:
-                rows[-1][1] = text[batch[0][-4]].title
+                rows[-1][1] = text[batch[0][-4]]['file'].title
                 use_text_header = True
             width[0] = max(width[0], wcswidth(rows[-1][0]))
             width[1] = max(width[1], wcswidth(rows[-1][1]))
         rows.append(1)
         for astart, aend, book, tstart, tend, score in batch:
-            a = [audio[ai].chapters[i] for i in range(astart, aend)]
-            t = [text[book].chapters[i] for i in range(tstart, tend)]
+            a = [audio[ai]['transcript'].chapters[i] for i in range(astart, aend)]
+            t = [text[book]['file'].chapters[i] for i in range(tstart, tend)]
             for i in range(max(len(a), len(t))):
                 row = ['', '' if t else '?', '']
                 if i < len(a):
-                    row[0] = (audio[ai].title + sep3 if not use_audio_header else '') + a[i].title.strip()
+                    row[0] = (audio[ai]['transcript'].title + sep3 if not use_audio_header else '') + a[i].title.strip()
                     width[0] = max(width[0], wcswidth(row[0]))
                 if i < len(t):
-                    row[1] = (text[book].title + sep3 if not use_text_header else '') + t[i].title.strip()
+                    row[1] = (text[book]['file'].title + sep3 if not use_text_header else '') + t[i].title.strip()
                     width[1] = max(width[1], wcswidth(row[1]))
                 if i == 0:
                     row[2] = format(score/100, '.2%') if score is not None else '?'
@@ -112,99 +133,38 @@ def print_batches(batches, audio, text, spacing=2, sep1='=', sep2='-', sep3='::'
         rows = rows[:-1]
     rows.append(1)
 
+    remaining_columns = columns - sum([w for i, w in enumerate(width) if not elide[i]]) - len(width)
+    elidable_sum = sum([w for i, w in enumerate(width) if elide[i]])
+    prop = [min(int(w/elidable_sum*remaining_columns), w) if elide[i] else w for i, w in enumerate(width)]
     for row in rows:
         csep = ' ' * spacing
         if isinstance(row, int):
             sep = sep1 if row == 1 else sep2
-            print(csep.join([sep*w for w in width]))
+            print(csep.join([sep*w for w in prop]))
             continue
-        print(csep.join([r.ljust(width[i]-wcswidth(r)+len(r)) for i, r in enumerate(row)]))
+
+        formatted = []
+        for i, r in enumerate(row):
+            if elide[i] and wcswidth(r) > prop[i]:
+                r = truncate(r, prop[i], '...')
+            formatted.append(r)
+        print(csep.join([r.ljust(prop[i]-wcswidth(r)+len(r)) for i, r in enumerate(formatted)]))
 
 def to_epub():
     pass
 
+
 def to_subs(text, subs, alignment):
     from ats.text import SubLine
     segments = []
-    for ai, a in enumerate(alignment):
-        if a[0] == -1:
-            continue
-        ts, te = a[0], a[1]
-        tso, teo = a[2], a[3]
-        line = ''.join([text[i].text() for i in range(ts, te)])
-        line =  line[tso:-len(text[te-1].text())+teo]
+    for ai, a, in enumerate(alignment):
         s = subs[ai]
-        if False and line.strip(): # Debug
-            line = s.text()+'\n'+line
-        segments.append(SubLine(content=line if line.strip() else '＊'+s.text(), start=s.start, end=s.end))
+        seg1, seg2, off1, off2 = a
+        line = (text[seg1].text()[off1:off2] if seg1 == seg2 else
+                text[seg1].text()[off1:] + ''.join([text[t].text() for t in range(seg1+1, seg2)]) + text[seg2].text()[:off2])
+        content = SubLine(content=line if line.strip() else '＊'+s.text(), start=s.start, end=s.end)
+        segments.append(content)
     return segments
-
-def prompt(message, lchoices):
-    if lchoices == 0:
-        return []
-    while True:
-        inp = input(message) # Taken from yay
-        r = set()
-        for a in inp.split():
-            try:
-                if a[0] == '^':
-                    val = int(a[1:])
-                    r = r.union(range(l)) - {val}
-                elif len(k := a.split('-')) > 1:
-                    val1 = min(int(k[0]), l-1)
-                    val2 = min(int(k[1]), l-1)
-                    r = r.union(range(val1, val2+1))
-                else:
-                    if (val1 := int(a)) < l:
-                        r.add(val1)
-            except ValueError:
-                print("Parsing failed")
-                continue
-        return r
-
-def select_streams(audio):
-    return [a.streams[a.default_stream] for a in audio]
-
-def whisper(audio, text, language, output_dir, output_format, file_overwrite,
-            model, device, batch_size,
-            local_only, memsize, quantize,
-            use_cache, cache_dir, overwrite_cache,
-            prepend_punctuations, append_punctuations, nopend_punctuations,
-            **model_args):
-    from ats import align
-    from ats.calign import Aligner
-    # TODO redo the cache
-
-    aligner = Aligner(memsize=memsize, match=1, mismatch=-2, gap_open=-2, gap_extend=-1)
-    print('Fuzzy matching chapters...')
-    ats, sta = match_start(aligner, transcription, text, prepend_punctuations, append_punctuations, nopend_punctuations)
-    audio_batches = expand_matches(audio, text, ats, sta)
-    print_batches(audio_batches, audio, text)
-
-    print('Syncing...')
-    with tqdm(audio_batches) as bar:
-        for ai, batches in enumerate(bar):
-            out = output_dir / (audio[ai].path.stem + '.' + output_format)
-
-            bar.set_description(audio[ai].path.name)
-            segments = []
-            for astart, aend, book, tstart, tend, _ in tqdm(batches):
-                language = get_lang(transcription[ai].chapters[astart].language, prepend_punctuations, append_punctuations, nopend_punctuations)
-                tcontent = [s for i in range(tstart, tend) for s in text[book].chapters[i].text()]
-                acontent = [s for i in range(astart, aend) for s in transcription[ai].chapters[i].segments]
-                alignment, references = align.align(aligner, language, acontent, tcontent, [], set(), set(), set())
-                segments.extend(to_subs(tcontent, acontent, alignment))
-
-            if not segments:
-                continue
-
-            with out.open("w", encoding='utf8') as o:
-                if output_format == "srt":
-                    o.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
-                elif output_format == 'vtt':
-                    o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
-
-
 
 def cache_main(args):
     pass
@@ -221,7 +181,6 @@ if __name__ == "__main__":
     from pathlib import Path
     from itertools import chain
 
-
     parser = argparse.ArgumentParser(description="Match audio to a transcript")
     subparsers = parser.add_subparsers(help="Commands", dest="command")
 
@@ -230,11 +189,15 @@ if __name__ == "__main__":
     sync_parser.add_argument("--progress", default=True, action=argparse.BooleanOptionalAction,  help="progress bar on/off")
     sync_parser.add_argument("--overwrite", default=False, action=argparse.BooleanOptionalAction,  help="overwrite any destination files")
 
+    sync_parser.add_argument("--prepend_punctuations", default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
+    sync_parser.add_argument("--append_punctuations", default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~…", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
+
     sync_parser.add_argument("--output-dir", default=u'.', type=Path, help="output directory")
     sync_parser.add_argument("--output-format", default='srt', choices=['srt', 'vtt', 'epub'], help="output format, epub will create an epub file with a media overlay")
 
     global_option =  make_forward_option('')
     sync_parser.add_argument("--language", action=global_option, help="language of the script and audio")
+    sync_parser.add_argument("--ignore", action=global_option, help="chapters to ignore while aligning and transcribing") # need separate options?
 
     text_action = make_input_option('text')
     text_option =  make_forward_option('text')
@@ -247,7 +210,6 @@ if __name__ == "__main__":
     audio_group = sync_parser.add_argument_group("Audio options")
     audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, nargs='?', help="path to an audio file")
     audio_group.add_argument("--stream", type=int, action=audio_option, help="stream language or index with in the audio file to use")
-    audio_group.add_argument("--ignore", nargs="*", action=audio_option, help="chapters to ignore while aligning and transcriping")
     audio_group.add_argument("--cache-entry", type=int, action=audio_option, help="cache id for the audio file")
 
     model_group = sync_parser.add_argument_group("Model options")
@@ -260,12 +222,13 @@ if __name__ == "__main__":
 
     aligner_group = sync_parser.add_argument_group("Aligner options")
     aligner_group.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
-    aligner_group.add_argument("--prepend_punctuations", default="\"\'“¿([{-『「（〈《〔【｛［‘“〝※", help="if word_timestamps is True, merge these punctuation symbols with the next word")
-    aligner_group.add_argument("--append_punctuations", default="\"\'・.。,，!！?？:：”)]}、』」）〉》〕】｝］’〟／＼～〜~", help="if word_timestamps is True, merge these punctuation symbols with the previous word")
-    aligner_group.add_argument("--nopend_punctuations", default="うぁぃぅぇぉっゃゅょゎゕゖァィゥェォヵㇰヶㇱㇲッㇳㇴㇵㇶㇷㇷ゚ㇸㇹㇺャュョㇻㇼㇽㇾㇿヮ…\u3000\x20", help="TODO")
+    aligner_group.add_argument("--match", type=int, default=1, help="")
+    aligner_group.add_argument("--mismatch", type=int, default=-1, help="")
+    aligner_group.add_argument("--gap-open", type=int, default=-1, help="")
+    aligner_group.add_argument("--gap-extend", type=int, default=-1, help="")
 
     transcription_group = sync_parser.add_argument_group("Transcription options")
-    transcription_group.add_argument("--use-stream-language", type=bool, action=argparse.BooleanOptionalAction)
+    transcription_group.add_argument("--use-stream-language", action=argparse.BooleanOptionalAction)
 
     transcription_group.add_argument("--num-chunks", type=int, default=10, help="todo")
     transcription_group.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
@@ -301,28 +264,25 @@ if __name__ == "__main__":
 
     tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.progress)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    ao = {a.dest: getattr(args, a.dest) for a in aligner_group._group_actions}
 
     print("Loading...")
     text = args.text
-    # pprint(text)
 
-    cacheless_streams, cached_streams = [], []
+    cacheless_streams, transcripts = [], []
     for r in args.audio:
-        if 'cache_entry' not in r:
-            if 'file' not in r:
-                raise Exception("audio option with neither a file nor a cache entry attached")
+        if entry_id := r.get('cache_entry', None):
+            try:
+                entry = cache.get(entry_id)
+                transcripts.append(dict(**r, transcript=entry))
+                continue
+            except Exception as e:
+                print(f"couldn't find cache entry {entry_id}: {e}")
+
+        if 'file' in r:
             cacheless_streams.append(r)
             continue
-        entry_id = r['cache_entry']
-        try:
-            entry = cache.get(entry_id)
-            cached_streams.append({**r, 'transcript': entry})
-        except Exception as e:
-            if 'file' not in r:
-                raise Exception("audio option with neither a file nor a cache entry attached")
-            print(f"couldn't find cache entry {entry_id}: {str(e)}, transcribing {r['file'].path.name}")
-            cacheless_streams.append(r)
+
+        print("--audio option with neither a file nor a cache entry attached")
 
     if len(cacheless_streams):
         model = Model(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
@@ -331,6 +291,39 @@ if __name__ == "__main__":
         transcripts = model.transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
         for r, t in zip(cacheless_streams, transcripts):
             cache.put(r, t)
-            cached_streams.append({**r, 'transcript': t})
-    pprint(cached_streams[0]['transcript'].chapters[-2].segments)
+            transcripts.append(dict(**r, transcript=t))
 
+    from ats import align
+    from ats.calign import Aligner
+    aligner = Aligner(**{a.dest: getattr(args, a.dest) for a in aligner_group._group_actions})
+    ats, sta = match_start(aligner, transcripts, text, args.prepend_punctuations, args.append_punctuations)
+    audio_batches = expand_matches(transcripts, text, ats, sta)
+    print_batches(audio_batches, transcripts, text)
+
+    print('Syncing...')
+    with tqdm(audio_batches) as bar:
+        for ai, batches in enumerate(bar):
+            out = args.output_dir / (transcripts[ai]['transcript'].title + '.' + args.output_format)
+
+            bar.set_description(transcripts[ai]['transcript'].title)
+            segments = []
+            for astart, aend, book, tstart, tend, _ in tqdm(batches):
+                # Take into account the language passed
+                language = get_lang(transcripts[ai]['transcript'].chapters[astart].language, args.prepend_punctuations, args.append_punctuations)
+                tcontent = [s for i in range(tstart, tend) for s in text[book]['file'].chapters[i].text()]
+                acontent = [s for i in range(astart, aend) for s in transcripts[ai]['transcript'].chapters[i].segments]
+                alignment, references = align.align(aligner, language, acontent, tcontent, [], args.prepend_punctuations, args.append_punctuations)
+                segments.extend(to_subs(tcontent, acontent, alignment))
+
+            if not segments:
+                continue
+
+            with out.open("w", encoding='utf8') as o:
+                if args.output_format == "srt":
+                    o.write('\n\n'.join(str(i+1)+'\n'+s.vtt(use_comma=True) for i, s in enumerate(segments)))
+                elif args.output_format == 'vtt':
+                    o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
+
+# python -m ats sync --output-dir /tmp/ --cache-path TranscriptionCache.sqlite \
+# --cache-entry 1  --audio \
+# --ignore "巻末おまけ　漫画：しいなゆう「ゆるっとふわっと日常家族」" --text /tmp/honzuki/'【小説16巻】本好きの下剋上～司書になるためには手段を選んでいられません～第四部「貴族院の自称図書委員IV」.epub'

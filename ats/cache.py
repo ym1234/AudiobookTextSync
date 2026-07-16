@@ -114,7 +114,7 @@ class Cache:
         transcripts = self.conn.execute(_LIST_TRANSCRIPTS, dict(num=limit)).fetchall()
 
     def get(self, id):
-        transcript = dict(self.conn.execute(_GET_TRANSCRIPT, dict(id=id)).fetchone())
+        transcript = dict(self.conn.execute(_GET_TRANSCRIPT, dict(id=id)).fetchall()[0])
         transcript = CachedTranscript(**transcript, chapters=[])
         chapter_rows = self.conn.execute(_GET_CHAPTERS, dict(transcript_id=id)).fetchall()
         chapters = []
@@ -123,8 +123,6 @@ class Cache:
             chapter_id = chapter.pop("id")
             chapter.pop('transcript_id')
             chapter.pop('idx')
-            if 'language' not in chapter:
-                chapter['language'] = '' # for now
             chapter = ChapterTranscript(**chapter, chunks=[], segments=[])
 
             chunk_rows =  self.conn.execute(_GET_CHUNKS, dict(chapter_id=chapter_id)).fetchall()
@@ -133,8 +131,9 @@ class Cache:
                 k = dict(cr)
                 k.pop('id')
                 k.pop('chapter_id')
+                k.pop('tokens')
                 k.pop('idx')
-                chapter.chunks.append(Chunk(**k))
+                chapter.chunks.append(Chunk(**k, tokens=[]))
 
             for sr in segment_rows:
                 k = dict(sr)

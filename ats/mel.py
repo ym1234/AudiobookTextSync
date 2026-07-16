@@ -61,6 +61,16 @@ def mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=80):
 
     return weights, cnp.hanning(N_FFT + 1)[:-1].astype(cnp.float32)
 
+def spectrogram(filters, window, lmax, buffer):
+    s = stft(buffer, window, SAMPLE_RATE, N_FFT, HOP_LENGTH)[:(N_FFT >> 1) + 1]
+    magnitudes = cnp.abs(s) ** 2 # https://stackoverflow.com/questions/30437947/most-memory-efficient-way-to-compute-abs2-of-complex-numpy-ndarray
+    mel_spec = filters @ magnitudes
+    log_spec = cnp.log10(cnp.clip(mel_spec, a_min=1e-10, a_max=None))
+
+    lmax = max(lmax, log_spec.max())
+    log_spec = cnp.maximum(log_spec, lmax - 8.0)
+    return (log_spec + 4) / 4, lmax
+
 class MelWorker(Thread):
     def __init__(self, request_queue, n_mels=80, num_chunks=10):
         super().__init__()
@@ -69,7 +79,7 @@ class MelWorker(Thread):
         self.num_chunks = num_chunks
         self.n_mels = n_mels
         self.daemon = True
-        self.filters, self.window = mel_filters_window()
+        self.filters, self.window = mel_filters_window(n_mels=n_mels)
 
     def start_process(self, job):
         path, stream, chapter = job['path'], job['stream'], job['chapter']
@@ -92,7 +102,6 @@ class MelWorker(Thread):
 
     def run(self):
         while request := self.request_queue.get():
-            if not request: return
             queue = request['queue']
             process = self.start_process(request)
 
@@ -104,18 +113,22 @@ class MelWorker(Thread):
 
             stderr = b""
             while nread//4 >= len(buffer):
-                queue.put((self.mel(cnp.asarray(buffer)), False))
+                logspec, self.lmax = spectrogram(self.filters, self.window, self.lmax, cnp.asarray(buffer))
+                queue.put((logspec, False))
                 buffer[:N_FFT-HOP_LENGTH] = buffer[-N_FFT+HOP_LENGTH:]
                 nread = process.stdout.readinto(buffer[N_FFT-HOP_LENGTH:]) + 4*(N_FFT-HOP_LENGTH)
                 if k := process.stderr.read(0):
                     stderr += k
 
+            # TODO: tenvad, silerovad, wanted to them on the gpu but hmm
             buffer = buffer[:nread//4]
             leftover = N_FFT - len(buffer) % N_FFT
             if leftover > len(buffer):
                 buffer = np.pad(buffer, (0, leftover-len(buffer)))
             buffer = np.pad(buffer, (0, leftover), mode='reflect')
-            queue.put((self.mel(cnp.asarray(buffer)), True))
+
+            logspec, self.lmax = spectrogram(self.filters, self.window, self.lmax, cnp.asarray(buffer))
+            queue.put((logspec, True))
 
             try:
                 if stderr:
@@ -124,12 +137,3 @@ class MelWorker(Thread):
             except Exception as e:
                 tqdm.write(str(e))
 
-    def mel(self, buffer):
-        s = stft(buffer, self.window, SAMPLE_RATE, N_FFT, HOP_LENGTH)[:(N_FFT >> 1) + 1]
-        magnitudes = cnp.abs(s) ** 2 # https://stackoverflow.com/questions/30437947/most-memory-efficient-way-to-compute-abs2-of-complex-numpy-ndarray
-        mel_spec = self.filters @ magnitudes
-        log_spec = cnp.log10(cnp.clip(mel_spec, a_min=1e-10, a_max=None))
-
-        self.lmax = max(self.lmax, log_spec.max())
-        log_spec = cnp.maximum(log_spec, self.lmax - 8.0)
-        return (log_spec + 4) / 4
