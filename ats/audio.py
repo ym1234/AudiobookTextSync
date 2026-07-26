@@ -23,10 +23,10 @@ class Container:
 
     def __getitem__(self, selector):
         try:
-            selector = int(stream_selector)
+            selector = int(selector)
         except:
             pass
-        if isinstance(stream_selector, int):
+        if isinstance(selector, int):
             return self.streams[self.default_stream if selector == -1 else selector]
         for s in self.streams:
             if s.language == selector:

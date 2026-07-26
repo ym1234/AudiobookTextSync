@@ -24,7 +24,12 @@ AudiobookTextSync needs ffmpeg to be installed.
 ```
 git clone https://github.com/ym1234/AudiobookTextSync.git
 cd AudiobookTextSync
-pip install -r requirements.txt
+pip install -e '.[test]'
+```
+
+To build with ASan/UBSan enabled (for debugging the aligner's C extension), set `ATS_SANITIZE=1`:
+```
+ATS_SANITIZE=1 pip install -e '.[test]' --no-build-isolation
 ```
 
 ## Credits

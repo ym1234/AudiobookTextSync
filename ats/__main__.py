@@ -169,7 +169,8 @@ def to_subs(text, subs, alignment):
 def cache_main(args):
     pass
 
-if __name__ == "__main__":
+
+def main():
     import argparse
 
     from ats.text import TextFile
@@ -256,11 +257,14 @@ if __name__ == "__main__":
     cache_parser.add_argument('--remove', type=int, nargs="+", help="delete cache entries")
 
     args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        return
 
     cache = Cache(args.cache_path)
     if args.command == 'cache':
         cache_main(args, cache)
-        exit(0)
+        return
 
     tqdm.__init__ = partialmethod(tqdm.__init__, disable=not args.progress)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -324,6 +328,10 @@ if __name__ == "__main__":
                 elif args.output_format == 'vtt':
                     o.write("WEBVTT\n\n"+'\n\n'.join(s.vtt() for s in segments))
 
+
+
+if __name__ == "__main__":
+    main()
 # python -m ats sync --output-dir /tmp/ --cache-path TranscriptionCache.sqlite \
 # --cache-entry 1  --audio \
 # --ignore "巻末おまけ　漫画：しいなゆう「ゆるっとふわっと日常家族」" --text /tmp/honzuki/'【小説16巻】本好きの下剋上～司書になるためには手段を選んでいられません～第四部「貴族院の自称図書委員IV」.epub'

@@ -1,9 +1,0 @@
-numpy>=2.0.0
-wcwidth>=0.2.13
-ctranslate2<=4.4.0
-beautifulsoup4>=4.12.0
-tqdm>=4.66.3
-regex>=2023.12.25
-EbookLib>=0.18
-chinese_converter==1.1.1
-pycountry>=23.12.11
