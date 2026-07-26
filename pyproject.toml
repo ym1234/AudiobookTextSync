@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "Cython>=3.0", "numpy>=2.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ats"
+version = "1.2.0"
+description = "Sync your ebooks & audiobooks"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "ym" },
+    { name = "KanjiEater", email = "kanjieat3r@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "numpy>=2.0.0",
+    "wcwidth>=0.2.13",
+    "beautifulsoup4>=4.12.0", # TODO
+    "tqdm>=4.66.3",
+    "regex>=2023.12.25",
+    "EbookLib>=0.18", # TODO?
+    "chinese_converter==1.1.1",
+    "pycountry>=23.12.11",
+    "huggingface-hub",
+    "tokenizers>=0.23.1",
+    "ctranslate2>=4.8.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+ats = "ats.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ats*"]
