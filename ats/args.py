@@ -24,11 +24,18 @@ def make_input_option(state):
 
             pending = getattr(namespace, state+"_pending", {})
             global_pending = getattr(namespace, "_pending", {})
-            getattr(namespace, self.dest).append({
-                **({"file": values} if values else {}),
-                **pending,
-                **global_pending
-                })
+            if isinstance(values, list):
+                getattr(namespace, self.dest).extend([{
+                    **({"file": v} if values else {}),
+                    **pending,
+                    **global_pending
+                    } for v in values])
+            else:
+                getattr(namespace, self.dest).append({
+                    **({"file": values} if values else {}),
+                    **pending,
+                    **global_pending
+                    })
             pending.clear()
             global_pending.clear()
     return InputOption

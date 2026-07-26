@@ -209,7 +209,7 @@ def main():
     audio_action = make_input_option('audio')
     audio_option =  make_forward_option('audio')
     audio_group = sync_parser.add_argument_group("Audio options")
-    audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, nargs='?', help="path to an audio file")
+    audio_group.add_argument("--audio", type=Container.from_file, action=audio_action, required=True, nargs='+', help="path to an audio file")
     audio_group.add_argument("--stream", type=int, action=audio_option, help="stream language or index with in the audio file to use")
     audio_group.add_argument("--cache-entry", type=int, action=audio_option, help="cache id for the audio file")
 

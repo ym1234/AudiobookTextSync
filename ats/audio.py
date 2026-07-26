@@ -71,7 +71,7 @@ class Container:
 
         self = cls(path=path, title=title, duration=duration, default_stream=default_stream, chapters=chapters, streams=[])
         for s in info['streams']:
-            alpha3 = s['tags'].get('language', None)
+            alpha3 = s.get('tags', {}).get('language', None)
             language = pycountry.languages.get(alpha_3=alpha3).alpha_2 if alpha3 is not None else None
             stream = Stream(idx=s['index'], duration=s.get('duration', duration), language=language)
             self.streams.append(stream)
