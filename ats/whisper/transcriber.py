@@ -48,7 +48,7 @@ class Transcriber:
         return [Transcript(model=self.backend.model_name, at=datetime.now(), confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i in range(len(requests))]
 
-    def _transcribe(self, jobs, num_chunks, batch_size, temperatures, beam_size, patience, num_hypotheses,
+    def _transcribe(self, jobs, num_chunks, batch_size, temperatures, num_hypotheses,
                     length_penalty, logprob_threshold, nospeech_threshold, **model_args):
         backend = self.backend
         main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0,
@@ -87,12 +87,14 @@ class Transcriber:
         penalty = norm if length_penalty is None else gnmt
         ts_begin = self.tokenizer.timestamp_begin
 
-        def decode(streams, temperature):
+        def decode(streams):
+            # one rung per stream per round, so a window that failed only holds up itself and not the whole batch
+            temps = [temperatures[a.window.attempt] for a in streams]
             prompts = [[self.tokenizer.sot, a.language, self.tokenizer.transcribe] if backend.is_multilingual
                        else [self.tokenizer.sot] for a in streams]
-            rs = backend.generate([a.window.encoded for a in streams], prompts, temperature,
-                                  beam_size, patience, num_hypotheses, **model_args)
-            for a, r in zip(streams, rs):
+            rs = backend.generate([a.window.encoded for a in streams], prompts, temps,
+                                  num_hypotheses, **model_args)
+            for a, temperature, r in zip(streams, temps, rs):
                 w = a.window
                 w.no_speech, w.attempt = r.no_speech_prob, w.attempt + 1
                 for j, k in enumerate(r.sequences_ids):
@@ -155,14 +157,10 @@ class Transcriber:
                 assert backend.is_multilingual or all(a.language is not None for a in fresh), "english-only streams start with <|en|>"
                 undetected = [a for a in fresh if a.language is None]
                 if undetected:
-                    languages = backend.detect_language(np.stack([a.window.encoded for a in undetected]))
+                    languages = backend.detect_language([a.window.encoded for a in undetected])
                     for a, language in zip(undetected, languages): a.language = language
 
-            # one rung per stream per round, so a window that failed only holds up itself and not the whole batch
-            by_temperature = {}
-            for a in ready: by_temperature.setdefault(temperatures[a.window.attempt], []).append(a)
-            for temperature, streams in by_temperature.items():
-                decode(streams, temperature)
+            decode(ready)
 
             for a in [a for a in ready if a.window.accepted or a.window.attempt == len(temperatures)]:
                 w, a.window = a.window, None

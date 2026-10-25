@@ -30,6 +30,7 @@ dependencies = [
     "tokenizers>=0.23.1",
     "ctranslate2>=4.8.1",
     "threadpoolctl>=3.5",
+    "mlx>=0.29.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.optional-dependencies]

@@ -1,9 +1,8 @@
 import os
-import multiprocessing
-import huggingface_hub
 import numpy as np
 from ats.np import np as cnp
 from ats.whisper.tokenizer import Tokenizer
+from ats.whisper.models import CT2_MODELS, download
 
 # Stupid hack because python doesn't have lazy imports (torch)
 def _import_c2():
@@ -48,36 +47,9 @@ def _import_c2():
     return c2ext.Whisper, c2ext.WhisperGenerationResult, c2ext.get_cuda_device_count, c2ext.get_supported_compute_types, c2ext.StorageView
 Whisper, WhisperGenerationResult, get_cuda_device_count, get_supported_compute_types, StorageView, = _import_c2()
 
-_MODELS = {
-    "tiny.en": "Systran/faster-whisper-tiny.en",
-    "tiny": "Systran/faster-whisper-tiny",
-    "base.en": "Systran/faster-whisper-base.en",
-    "base": "Systran/faster-whisper-base",
-    "small.en": "Systran/faster-whisper-small.en",
-    "small": "Systran/faster-whisper-small",
-    "medium.en": "Systran/faster-whisper-medium.en",
-    "medium": "Systran/faster-whisper-medium",
-    "large-v1": "Systran/faster-whisper-large-v1",
-    "large-v2": "Systran/faster-whisper-large-v2",
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "large": "Systran/faster-whisper-large-v3",
-    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
-    "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
-    "distil-small.en": "Systran/faster-distil-whisper-small.en",
-    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-}
-
-def available_models(): return list(_MODELS.keys())
-def download_model(model_name, local_dir=None, local_files_only=False):
-    repo_id = _MODELS.get(model_name, model_name)
-    return huggingface_hub.snapshot_download(repo_id, local_dir=local_dir, local_dir_use_symlinks=False,
-                                             local_files_only=local_files_only, max_workers=multiprocessing.cpu_count())
-
 class Ct2Backend:
     def __init__(self, model, device='auto', device_index=0, quantize=True, download_root=None, local_files_only=False):
-        model_path = model if os.path.isdir(model) else download_model(model, download_root, local_files_only)
+        model_path = model if os.path.isdir(model) else download(CT2_MODELS.get(model, model), download_root, local_files_only)
         self.model_name = model
         num_cuda = get_cuda_device_count()
         device = 'cpu' if num_cuda == 0 else device
@@ -98,15 +70,18 @@ class Ct2Backend:
         return np.asarray(self.model.encode(features, to_cpu=True)) # TODO, make it always live on the gpu. For now we can't do that with cupy
 
     def detect_language(self, encoded):
-        return [self.tokenizer.token_to_id(r[0][0]) for r in self.model.detect_language(StorageView.from_array(encoded))]
-
-    def generate(self, encoded, prompts, temperature, beam_size, patience, num_hypotheses, **model_args):
-        # beam size alone is trash, and it only makes sense at temperature zero. the temperature always has to be
-        # passed because ct2 only uses its greedy sampler at temperature 0 or topk 1, and otherwise samples, beam search
-        # included, at its default temperature of 1
-        args = dict(beam_size=beam_size, patience=patience) if temperature == 0 else \
-               dict(beam_size=1, num_hypotheses=num_hypotheses)
         stacked = np.stack(encoded) # from_array doesn't take ownership, so this has to outlive the call
-        return self.model.generate(StorageView.from_array(stacked), prompts, return_scores=True,
-                                   return_no_speech_prob=True, length_penalty=0, sampling_temperature=temperature,
-                                   **args, **model_args)
+        return [self.tokenizer.token_to_id(r[0][0]) for r in self.model.detect_language(StorageView.from_array(stacked))]
+
+    def generate(self, encoded, prompts, temperatures, num_hypotheses, **model_args):
+        """one ct2 call per distinct temperature, ct2 only takes a single temperature per call"""
+        results = [None] * len(prompts)
+        for temperature in set(temperatures):
+            rows = [i for i, t in enumerate(temperatures) if t == temperature]
+            args = dict(beam_size=1, num_hypotheses=1 if temperature == 0 else num_hypotheses)
+            stacked = np.stack([encoded[i] for i in rows]) # from_array doesn't take ownership, this has to outlive the call
+            rs = self.model.generate(StorageView.from_array(stacked), [prompts[i] for i in rows], return_scores=True,
+                                     return_no_speech_prob=True, length_penalty=0, sampling_temperature=temperature,
+                                     **args, **model_args)
+            for i, r in zip(rows, rs): results[i] = r
+        return results
