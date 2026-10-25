@@ -176,8 +176,9 @@ def main():
     from ats.text import TextFile
     from ats.audio import Container
     from ats.whisper import Transcriber
-    from ats.whisper.models import available_models
-    from ats.whisper.backend import load_backend, BACKENDS
+    from dataclasses import asdict
+    from ats.whisper.backend import load_backend
+    from ats.whisper.options import ModelOptions, TranscribeOptions, DecodeOptions, add_arguments, from_args
     from ats.cache import Cache
 
     from functools import partialmethod
@@ -216,13 +217,7 @@ def main():
     audio_group.add_argument("--cache-entry", type=int, action=audio_option, help="cache id for the audio file")
 
     model_group = sync_parser.add_argument_group("Model options")
-    model_group.add_argument("--model", default="tiny", help=f"whisper model to use, can be a huggingface path or one of {available_models()}")
-    model_group.add_argument("--backend", default="auto", choices=BACKENDS, help="mlx or ctranslate2, auto picks mlx on apple silicon and ctranslate2 everywhere else")
-    model_group.add_argument("--device", default='auto', help="device to do inference on")
-    model_group.add_argument("--local-files-only", default=False, action=argparse.BooleanOptionalAction, help="Don't download models")
-    model_group.add_argument('--quantize', default=True, action=argparse.BooleanOptionalAction, help="use fp16 on gpu or int8 on cpu")
-    model_group.add_argument('--download-root', default=None, help="directory to download the model to")
-    model_group.add_argument('--device-index', type=int, default=0, help="device to load the model on")
+    add_arguments(model_group, ModelOptions)
 
     aligner_group = sync_parser.add_argument_group("Aligner options")
     aligner_group.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
@@ -231,25 +226,8 @@ def main():
     aligner_group.add_argument("--gap-open", type=int, default=-1, help="")
     aligner_group.add_argument("--gap-extend", type=int, default=-1, help="")
 
-    transcription_group = sync_parser.add_argument_group("Transcription options")
-    transcription_group.add_argument("--use-stream-language", action=argparse.BooleanOptionalAction)
-
-    transcription_group.add_argument("--num-chunks", type=int, default=10, help="todo")
-    transcription_group.add_argument("--batch-size", type=int, default=4, help="number of batches to do at once")
-    transcription_group.add_argument("--num-hypotheses", type=int, default=5, help="number of candidates when sampling with non-zero temperature")
-    transcription_group.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
-
-    transcription_group.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
-    transcription_group.add_argument("--no-repeat-ngram-size", type=int, default=0, help="penalty applied to the score of previously generated tokens")
-    transcription_group.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
-
-    transcription_group.add_argument("--suppress-blank", default=True, action=argparse.BooleanOptionalAction, help="suppress blank tokens at the start of sampling")
-    transcription_group.add_argument("--suppress-tokens", default=[-1], help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
-
-    transcription_group.add_argument("--temperatures", type=float, default=[0, 0.2, 0.4, 0.6, 0.8, 1], nargs='+', help="temperature(s) to use for sampling")
-    transcription_group.add_argument("--sampling-topk", type=int, default=0, help="only use the top k tokens for sampling")
-    transcription_group.add_argument("--logprob-threshold", type=float, default=-1.0, help="if the average log probability is lower than this value, treat the decoding as failed")
-    transcription_group.add_argument("--nospeech_threshold", type=float, default=0.6, help="if the probability of the <|nospeech|> token is higher than this value AND the decoding has failed due to `log_prob_threshold`, consider the segment as silence")
+    add_arguments(sync_parser.add_argument_group("Transcription options"), TranscribeOptions)
+    add_arguments(sync_parser.add_argument_group("Decoding options"), DecodeOptions)
 
     cache_parser = subparsers.add_parser('cache', help='manage the cache')
 
@@ -290,10 +268,10 @@ def main():
         print("--audio option with neither a file nor a cache entry attached")
 
     if len(cacheless_streams):
-        model = load_backend(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
+        model = load_backend(**asdict(from_args(ModelOptions, args)))
         print(f"Using device: {model.device} with {model.compute_type} compute.")
 
-        transcripts = Transcriber(model).transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
+        transcripts = Transcriber(model).transcribe(cacheless_streams, from_args(TranscribeOptions, args), from_args(DecodeOptions, args))
         for r, t in zip(cacheless_streams, transcripts):
             cache.put(r, t)
             transcripts.append(dict(**r, transcript=t))

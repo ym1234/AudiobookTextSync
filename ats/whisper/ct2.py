@@ -73,15 +73,18 @@ class Ct2Backend:
         stacked = np.stack(encoded) # from_array doesn't take ownership, so this has to outlive the call
         return [self.tokenizer.token_to_id(r[0][0]) for r in self.model.detect_language(StorageView.from_array(stacked))]
 
-    def generate(self, encoded, prompts, temperatures, num_hypotheses, **model_args):
+    def generate(self, encoded, prompts, temperatures, opts):
         """one ct2 call per distinct temperature, ct2 only takes a single temperature per call"""
         results = [None] * len(prompts)
         for temperature in set(temperatures):
             rows = [i for i, t in enumerate(temperatures) if t == temperature]
-            args = dict(beam_size=1, num_hypotheses=1 if temperature == 0 else num_hypotheses)
+            args = dict(beam_size=1, num_hypotheses=1 if temperature == 0 else opts.num_hypotheses)
             stacked = np.stack([encoded[i] for i in rows]) # from_array doesn't take ownership, this has to outlive the call
             rs = self.model.generate(StorageView.from_array(stacked), [prompts[i] for i in rows], return_scores=True,
                                      return_no_speech_prob=True, length_penalty=0, sampling_temperature=temperature,
-                                     **args, **model_args)
+                                     sampling_topk=opts.sampling_topk, suppress_blank=opts.suppress_blank,
+                                     suppress_tokens=opts.suppress_tokens, repetition_penalty=opts.repetition_penalty,
+                                     no_repeat_ngram_size=opts.no_repeat_ngram_size,
+                                     max_initial_timestamp_index=opts.max_initial_timestamp_index, **args)
             for i, r in zip(rows, rs): results[i] = r
         return results

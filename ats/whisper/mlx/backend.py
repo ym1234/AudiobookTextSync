@@ -71,8 +71,6 @@ class MlxBackend:
 
     def _suppressed(self, suppress_tokens):
         tok = self.tokenizer
-        if isinstance(suppress_tokens, str):
-            suppress_tokens = [t for t in suppress_tokens.split(',') if t.strip()]
         out = set()
         for t in (suppress_tokens or []):
             t = int(t)
@@ -82,21 +80,19 @@ class MlxBackend:
                                tok.token_to_id("<|startofprev|>"), tok.token_to_id("<|startoflm|>")] if t is not None)
         return np.array(sorted(out), dtype=np.int64)
 
-    def generate(self, encoded, prompts, temperatures, num_hypotheses, sampling_topk=0,
-                 suppress_blank=True, suppress_tokens=(-1,), max_initial_timestamp_index=None,
-                 repetition_penalty=1, no_repeat_ngram_size=0):
+    def generate(self, encoded, prompts, temperatures, opts):
         """temperatures is one per window, greedy and sampled windows share a call"""
-        if int(no_repeat_ngram_size) > 1:
+        if opts.no_repeat_ngram_size > 1:
             raise ValueError("--no-repeat-ngram-size isn't supported by the mlx backend")
         temperatures = np.asarray(temperatures, dtype=np.float32)
 
         tok, dims = self.tokenizer, self.model.dims
         groups = len(prompts)
-        blank = [tok.encode(" ")[0], tok.eot] if suppress_blank else None
-        rules = search.LogitRules(tok, dims.n_vocab, self._suppressed(suppress_tokens), blank,
-                                  max_initial_timestamp_index, repetition_penalty)
+        blank = [tok.encode(" ")[0], tok.eot] if opts.suppress_blank else None
+        rules = search.LogitRules(tok, dims.n_vocab, self._suppressed(opts.suppress_tokens), blank,
+                                  opts.max_initial_timestamp_index, opts.repetition_penalty)
         # a greedy window needs one row, a sampled one its best-of-n
-        counts = np.where(temperatures == 0, 1, max(1, num_hypotheses))
+        counts = np.where(temperatures == 0, 1, max(1, opts.num_hypotheses))
         rows = np.repeat(np.arange(groups), counts)
 
         prompt = mx.array(np.array(prompts, dtype=np.int32)[rows])
@@ -113,7 +109,7 @@ class MlxBackend:
             no_speech = np.array(probs[:, tok.no_speech]).tolist()
 
         seqs, sum_logprobs = search.sample(self.model.decoder, rules, logits, kv_cache, xa, np.repeat(temperatures, counts),
-                                           sampling_topk, dims.n_text_ctx // 2)
+                                           opts.sampling_topk, dims.n_text_ctx // 2)
         hypotheses, start = [], 0
         for c in counts:
             h = sorted(((seqs[start+j].tolist(), float(sum_logprobs[start+j])) for j in range(c)), key=lambda x: x[1], reverse=True)

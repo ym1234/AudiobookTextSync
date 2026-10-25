@@ -8,6 +8,7 @@ from ats.mel import MelWorker
 from ats.np import np as cnp
 from ats.whisper.state import TranscriptionState, Window
 from ats.whisper.results import Chunk, ChapterTranscript, Transcript
+from ats.whisper.options import TranscribeOptions, DecodeOptions
 
 _MEL_LOOKAHEAD = 2
 
@@ -22,22 +23,23 @@ class Transcriber:
         code = req.get('language') or (stream.language if use_stream_language else None)
         return self.tokenizer.token_to_id(f"<|{code}|>") if code is not None else None
 
-    def transcribe(self, requests, num_chunks, batch_size, use_stream_language=False, **model_args):
-        if not self.backend.is_multilingual and (use_stream_language or any(r.get('language') for r in requests)):
+    def transcribe(self, requests, opts=None, decode_opts=None):
+        opts, decode_opts = opts or TranscribeOptions(), decode_opts or DecodeOptions()
+        if not self.backend.is_multilingual and (opts.use_stream_language or any(r.get('language') for r in requests)):
             raise ValueError("--language/--use-stream-language don't apply to English-only (.en) models")
 
         jobs = []
         for r in requests:
             file = r['file']
             stream = file[r['stream']] if 'stream' in r else file[file.default_stream]
-            language = self._language_token(r, stream, use_stream_language)
+            language = self._language_token(r, stream, opts.use_stream_language)
             for c in file.chapters:
                 ignore = r.get('ignore', {})
                 if str(c.id) in ignore or c.title in ignore:
                     continue
                 jobs.append(dict(path=file.path, stream=stream.idx, language=language, chapter=c, queue=Queue(maxsize=_MEL_LOOKAHEAD)))
 
-        results = self._transcribe(jobs, num_chunks, batch_size, **model_args)
+        results = self._transcribe(jobs, opts, decode_opts)
         idx = [0] + np.cumsum([len(r['file'].chapters) for r in requests], dtype=int).tolist()
         grouped = [results[s:e] for s, e in zip(idx, idx[1:])]
 
@@ -48,9 +50,10 @@ class Transcriber:
         return [Transcript(model=self.backend.model_name, at=datetime.now(), confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i in range(len(requests))]
 
-    def _transcribe(self, jobs, num_chunks, batch_size, temperatures, num_hypotheses,
-                    length_penalty, logprob_threshold, nospeech_threshold, **model_args):
+    def _transcribe(self, jobs, opts, decode_opts):
         backend = self.backend
+        temperatures, length_penalty = opts.temperatures, opts.length_penalty
+        logprob_threshold, nospeech_threshold = opts.logprob_threshold, opts.nospeech_threshold
         main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0,
                         bar_format="{l_bar}{bar}{n:3.2f}/{total:3.2f} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
                         leave=True)
@@ -60,8 +63,8 @@ class Transcriber:
 
         mel_queue = Queue()
         for k in jobs_sorted: mel_queue.put(jobs[k])
-        num_workers = min(len(jobs), max(batch_size, multiprocessing.cpu_count()))
-        mel_workers = [MelWorker(mel_queue, n_mels=backend.n_mels, num_chunks=num_chunks) for _ in range(num_workers)]
+        num_workers = min(len(jobs), max(opts.batch_size, multiprocessing.cpu_count()))
+        mel_workers = [MelWorker(mel_queue, n_mels=backend.n_mels, num_chunks=opts.num_chunks) for _ in range(num_workers)]
         # mel_queue.shutdown() # This is pretty new
         for _ in mel_workers: mel_queue.put(None) # poison value
         for w in mel_workers: w.start()
@@ -92,8 +95,7 @@ class Transcriber:
             temps = [temperatures[a.window.attempt] for a in streams]
             prompts = [[self.tokenizer.sot, a.language, self.tokenizer.transcribe] if backend.is_multilingual
                        else [self.tokenizer.sot] for a in streams]
-            rs = backend.generate([a.window.encoded for a in streams], prompts, temps,
-                                  num_hypotheses, **model_args)
+            rs = backend.generate([a.window.encoded for a in streams], prompts, temps, decode_opts)
             for a, temperature, r in zip(streams, temps, rs):
                 w = a.window
                 w.no_speech, w.attempt = r.no_speech_prob, w.attempt + 1
@@ -118,7 +120,7 @@ class Transcriber:
             return got
 
         active, pending = [], 0
-        for i in range(min(len(jobs), batch_size)):
+        for i in range(min(len(jobs), opts.batch_size)):
             active.append(new_active(i))
             pending += 1
 
