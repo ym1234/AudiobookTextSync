@@ -47,7 +47,8 @@ class Transcriber:
             vals = np.array([(c.logprob, len(c.tokens)) for ch in group for c in ch.chunks])
             return np.exp(vals[:, 0].sum()/(vals[:, 1].sum()+1))
 
-        return [Transcript(model=self.backend.model_name, at=datetime.now(), confidence=confidence(grouped[i]), chapters=grouped[i])
+        return [Transcript(title=requests[i]['file'].title, model=self.backend.model_name, at=datetime.now(),
+                           confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i in range(len(requests))]
 
     def _transcribe(self, jobs, opts, decode_opts):

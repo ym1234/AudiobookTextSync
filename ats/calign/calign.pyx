@@ -8,51 +8,69 @@ import numpy as np
 cimport numpy as cnp
 cnp.import_array()
 
-cdef extern from "x86intrin.h":
-    ctypedef int  __m256i
+cdef extern from "simd.h":
+    ctypedef int vec  # opaque here, only ever handled through pointers
+    enum: LANES
 
-cdef extern from "impl32.h":
+cdef extern from "striped.h":
     void reset32(
-        __m256i *, __m256i *, __m256i *, __m256i *,
-        __m256i *,  __m256i *,
+        vec *, vec *, vec *, vec *,
+        vec *,
         uint32_t *,
         int32_t, int32_t,
         int64_t, int64_t
     )
     void sgcol32(
-        __m256i *, uint32_t *,
+        vec *, uint32_t *,
         int64_t, int64_t,
-        __m256i *, __m256i *, __m256i *, __m256i *,
-        int32_t, int32_t, int32_t, int32_t
+        vec *, vec *,
+        int32_t, int32_t, int32_t, int32_t, int32_t
     )
     void sgtable32(
-        __m256i *, uint32_t *,
+        vec *, uint32_t *,
         int64_t, int64_t,
-        __m256i *, __m256i *, __m256i *,
-        int32_t, int32_t, int32_t, int32_t
+        vec *, vec *, vec *,
+        int32_t, int32_t, int32_t, int32_t, int32_t
     )
     int32_t trace32(
         uint32_t *, uint32_t *,
         int64_t, int64_t, int64_t,
         int32_t *, int32_t *, int32_t *,
-        int32_t, int32_t, int32_t, int32_t,
+        int32_t, int32_t, int32_t, int32_t, int32_t, int,
         int64_t *, int64_t *, int64_t, int64_t
     )
-    int maxsum32(__m256i *, const __m256i *, int)
+    void reverse_query32(const vec *, vec *, int64_t, int64_t)
+    int pairmax32(const vec *, const vec *, vec *, int64_t, int64_t, int32_t)
 
 
-cdef extern from "avx2.c":
+cdef extern from "diffrec.h":
     int64_t do_the_thing(
         uint8_t *qseq, int64_t unaligned, int64_t qlen,
         uint8_t *tseq, int64_t tlen,
         int8_t match, int8_t mismatch,
         int8_t gapo, int8_t gape
     )
+    enum: HAVE_DIFFREC
+
+cdef inline void _push(int64_t *t, int64_t *n, int64_t x, int64_t y) noexcept:
+    # append a path point unless it repeats the last one (junctions between nodes are shared)
+    if n[0] >= 2 and t[n[0] - 2] == x and t[n[0] - 1] == y:
+        return
+    t[n[0]] = x
+    t[n[0] + 1] = y
+    n[0] += 2
 
 cdef inline int64_t _align(int64_t n, int64_t alignment) noexcept:
     # assert alignment > 1, "alignment < 0" # remove noexcept if you enable this
     cdef int64_t a = alignment - 1
     return (n + a) & ~a
+
+# the striped layout: position p lives in vector p % stride, lane p / stride
+cdef inline int64_t _striped(int64_t p, int64_t stride) noexcept:
+    return (p % stride) * LANES + p // stride
+
+cdef inline int64_t _unstriped(int64_t i, int64_t stride) noexcept:
+    return (i % LANES) * stride + i // LANES
 
 cdef class BumpAllocator:
     cdef char *mem
@@ -114,9 +132,11 @@ cdef class BumpAllocator:
 
 cdef class Aligner:
     cdef int match, mismatch, gap_open, gap_extend
+    cdef public long long max_cells
     allocator: BumpAllocator
 
     def __init__(self, memsize: int = 1024*1024, match: int = 1, mismatch: int = -1, gap_open: int = -1, gap_extend: int = -1):
+        self.max_cells = 1 << 62   # test hook: split any node with more cells than this, even if it fits in memory
         self.match = match
         self.mismatch = mismatch
         self.gap_open = gap_open
@@ -125,6 +145,9 @@ cdef class Aligner:
 
 
     def score_difference_recurrence(self, query, database):
+        if not HAVE_DIFFREC:
+            raise NotImplementedError("score_difference_recurrence is only written for avx2")
+        # XXX: Don't ferget you're using utf-8 here you idiot
         cdef const cnp.uint8_t[::1] q = np.frombuffer(query.encode('utf-8'), dtype=np.uint8) if isinstance(query, str) else  query.astype(np.uint8)
         cdef const cnp.uint8_t[::1] d = np.frombuffer(database.encode('utf-8'), dtype=np.uint8) if isinstance(database, str) else database.astype(np.uint8)
         cdef int64_t lq = len(q)
@@ -149,28 +172,24 @@ cdef class Aligner:
         cdef int64_t lq = len(q)
         cdef int64_t ld = len(d)
 
-        cdef int64_t aligned = _align(lq, 8)
-        cdef int64_t stride = aligned // 8
+        cdef int64_t aligned = _align(lq, LANES)
+        cdef int64_t stride = aligned // LANES
 
         cdef int64_t bufsize = _align(aligned * sizeof(int32_t), 64)
 
         with self.allocator as allocator:
-            strided : cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvHLoad : cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvHStore: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvELoad : cython.pointer(__m256i)  = <__m256i *> self.allocator.alloc(bufsize)
-            pvEStore: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
+            strided : cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            pvH     : cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            pvE     : cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
 
             if self.allocator.isoverflow(): raise MemoryError(f"need at least {float(allocator.size())/1024**3:.2f} GiB(s)")
 
-            reset32(pvHLoad, NULL, pvELoad, NULL, strided, NULL,  &q[0], self.gap_open, self.gap_extend, lq, stride)
-            sgcol32(strided, &d[0],
-                    stride, ld,
-                    pvHLoad, pvHStore, pvELoad, pvEStore,
-                    self.match, self.mismatch, self.gap_open, self.gap_extend)
+            reset32(pvH, NULL, pvE, NULL, strided, &q[0], self.gap_open, self.gap_extend, lq, stride)
+            sgcol32(strided, &d[0], stride, ld, pvH, pvE,
+                    self.match, self.mismatch, self.gap_open, self.gap_extend, self.gap_open)
 
-            ra: cython.pointer(int32_t) = <int32_t *> (pvHStore if ld & 1 else pvHLoad)
-            r: int32_t = ra[(lq-1) // stride + ((lq-1) % stride) * 8]
+            ra: cython.pointer(int32_t) = <int32_t *> pvH
+            r: int32_t = ra[_striped(lq - 1, stride)]
             return r
 
     @cython.boundscheck(False)
@@ -182,29 +201,29 @@ cdef class Aligner:
         cdef int64_t ld = len(d)
 
         cdef int64_t tracelen = 0
-        cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(lq*2+ld*2, dtype=np.int64)
+        cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(2*(lq + ld + 1), dtype=np.int64)
 
-        cdef int64_t aligned = _align(lq, 8)
-        cdef int64_t stride = aligned // 8
+        cdef int64_t aligned = _align(lq, LANES)
+        cdef int64_t stride = aligned // LANES
 
         cdef int64_t bufsize = _align(aligned*sizeof(int32_t), 64)
         cdef int64_t tablesize = _align((ld + 1)*aligned*sizeof(int32_t), 64)
 
         with self.allocator as allocator:
-            strided: cython.pointer(__m256i)  = <__m256i *> self.allocator.alloc(bufsize)
+            strided: cython.pointer(vec)  = <vec *> self.allocator.alloc(bufsize)
 
-            pvH: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
-            pvE: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
-            pvF: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
+            pvH: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
+            pvE: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
+            pvF: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
 
             if self.allocator.isoverflow(): raise MemoryError(f"need {float(self.allocator.size())/1024**3:.2f} GiB(s)")
 
-            reset32(pvH, NULL, pvE, NULL, strided, NULL, &q[0], self.gap_open, self.gap_extend, lq, stride)
-            sgtable32(strided, &d[0], stride, ld, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend)
+            reset32(pvH, NULL, pvE, NULL, strided, &q[0], self.gap_open, self.gap_extend, lq, stride)
+            sgtable32(strided, &d[0], stride, ld, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend, self.gap_open)
 
             score: int32_t = trace32(&q[0], &d[0], lq, aligned, ld,
                                         <int32_t *> pvH, <int32_t *> pvE, <int32_t *> pvF,
-                                        self.match, self.mismatch, self.gap_open, self.gap_extend,
+                                        self.match, self.mismatch, self.gap_open, self.gap_extend, self.gap_open, 0,
                                         <int64_t *> traceback.data, &tracelen, 0, 0)
             return score, traceback[:tracelen].reshape(-1, 2)[::-1].T
 
@@ -218,26 +237,26 @@ cdef class Aligner:
         cdef int64_t ld = len(d)
 
         cdef int64_t tracelen = 0
-        cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(lq*2 + ld*2, dtype=np.int64)
+        cdef cnp.ndarray[cnp.int64_t] traceback = np.zeros(2*(lq + ld + 1), dtype=np.int64)   # a path has at most lq + ld + 1 points
 
-        cdef int64_t aligned = _align(lq, 8)
-        cdef int64_t stride  = aligned // 8
+        cdef int64_t aligned = _align(lq, LANES)
+        cdef int64_t stride  = aligned // LANES
 
         cdef int64_t  bufsize = _align(aligned*sizeof(int32_t), 64)
         cdef int64_t dbufsize = _align(ld*sizeof(int32_t), 64)
 
-        if not self.allocator.check(k := 10*bufsize + dbufsize): # More understandable error messages
+        if not self.allocator.check(k := 7*bufsize + dbufsize): # More understandable error messages
             raise MemoryError(f"need at least {k/1024**3:.2f} GiB(s)")
 
         cdef uint32_t[::1] dr = <uint32_t[:ld:1]> <uint32_t *> self.allocator.alloc(dbufsize)
-        cdef __m256i *strided = <__m256i *> self.allocator.alloc(bufsize)
+        cdef vec *strided = <vec *> self.allocator.alloc(bufsize)
 
         dr[...] = d[::-1]
 
-        # Tried to type this, didn't change anything
         cdef list nodes = [(0, lq, 0, ld, 0, 0)]
 
-        cdef int32_t score = 0
+        cdef int64_t score = 0 if lq == ld == 0 else self.gap_open + (max(lq, ld) - 1) * self.gap_extend if lq == 0 or ld == 0 else 0
+        root = True
         # Can't use cdefs here thats the dumbest shit ever
         while len(nodes):
             self.allocator.save()
@@ -247,121 +266,105 @@ cdef class Aligner:
             lx: int64_t = k[1]
             sy: int64_t = k[2]
             ly: int64_t = k[3]
-            # print(len(nodes), sx, lx, sy, ly)
-            kind = k[4]
+            tb, te = k[4], k[5]
+            open_tb = self.gap_extend if tb else self.gap_open
+            open_te = self.gap_extend if te else self.gap_open
 
             if lx <= 0 or ly <= 0:
                 while ly > 0:
-                    traceback[tracelen] = sx + lx - 1
-                    traceback[tracelen+1] = sy + ly - 1
-                    tracelen += 2
+                    _push(<int64_t *> traceback.data, &tracelen, sx + lx, sy + ly)
                     ly -= 1
                 while lx > 0:
-                    traceback[tracelen] = sx + lx - 1
-                    traceback[tracelen+1] = sy + ly - 1
-                    tracelen += 2
+                    _push(<int64_t *> traceback.data, &tracelen, sx + lx, sy + ly)
                     lx -= 1
-                if kind != 0:
-                    # print("KIND1", tracelen)
-                    traceback[tracelen] = sx - 1
-                    traceback[tracelen+1] = sy - 1
-                    traceback[tracelen+2] = sx - 1
-                    traceback[tracelen+3] = sy - 2
-                    tracelen += 4
+                _push(<int64_t *> traceback.data, &tracelen, sx, sy)
+                if tb:                            # the two carved arrows of a gap-crossing split
+                    _push(<int64_t *> traceback.data, &tracelen, sx, sy - 1)
+                    _push(<int64_t *> traceback.data, &tracelen, sx, sy - 2)
                 self.allocator.restore()
                 continue
 
-            aligned: int64_t = _align(lx, 8)
-            stride: int64_t = aligned // 8
+            aligned = _align(lx, LANES)
+            stride = aligned // LANES
 
-            bufsize: int64_t = _align(aligned*sizeof(int32_t), 64)
+            bufsize = _align(aligned*sizeof(int32_t), 64)
 
             tablesize: int64_t = _align((ly + 1)*aligned*sizeof(int32_t), 64)
-            if self.allocator.check(3*tablesize):
-                pvH: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
-                pvE: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
-                pvF: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(tablesize)
-                reset32(pvH, NULL, pvE, NULL, strided, NULL, &q[sx], self.gap_open, self.gap_extend, lx, stride)
-                sgtable32(strided, &d[sy], stride, ly, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend)
+            if self.allocator.check(3*tablesize) and (lx * ly <= self.max_cells or ly < 2):
+                pvH: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
+                pvE: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
+                pvF: cython.pointer(vec) = <vec *> self.allocator.alloc(tablesize)
+                reset32(pvH, NULL, pvE, NULL, strided, &q[sx], self.gap_open, self.gap_extend, lx, stride)
+                sgtable32(strided, &d[sy], stride, ly, pvH, pvE, pvF, self.match, self.mismatch, self.gap_open, self.gap_extend, open_tb)
                 s: int32_t = trace32(&q[sx], &d[sy], lx, aligned, ly,
                                      <int32_t *> pvH, <int32_t *> pvE, <int32_t *> pvF,
-                                     self.match, self.mismatch, self.gap_open, self.gap_extend,
+                                     self.match, self.mismatch, self.gap_open, self.gap_extend, open_tb, te,
                                      <int64_t *> traceback.data, &tracelen, sx, sy)
-                if kind != 0:
-                    traceback[tracelen] = sx - 1
-                    traceback[tracelen+1] = sy - 1
-                    traceback[tracelen+2] = sx - 1
-                    traceback[tracelen+3] = sy - 2
-                    tracelen += 4
-                score += s
+                if tb:                            # the two carved arrows of a gap-crossing split
+                    _push(<int64_t *> traceback.data, &tracelen, sx, sy - 1)
+                    _push(<int64_t *> traceback.data, &tracelen, sx, sy - 2)
+                if root: score = s
+                root = False
                 self.allocator.restore()
                 continue
 
-            rstrided:  cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
+            rstrided:  cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
 
-            pvHLoad:   cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvHStore:  cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvELoad:   cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvEStore:  cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
+            # the forward pass's rows and the reverse pass's, each worked on in place
+            vH1: cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            vE1: cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            vH2: cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            vE2: cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
 
-            pvHLoad2:  cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvHStore2: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvELoad2:  cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-            pvEStore2: cython.pointer(__m256i) = <__m256i *> self.allocator.alloc(bufsize)
-
-            reset32(pvHLoad, pvHLoad2, pvELoad, pvELoad2, strided, rstrided, &q[sx], self.gap_open, self.gap_extend, lx, stride)
+            reset32(vH1, vH2, vE1, vE2, strided, &q[sx], self.gap_open, self.gap_extend, lx, stride)
+            reverse_query32(strided, rstrided, stride, aligned - lx)
 
             ymid: int64_t = ly // 2
 
-            sgcol32(strided, &d[sy],
-                    stride, ymid,
-                    pvHLoad, pvHStore, pvELoad, pvEStore,
-                    self.match, self.mismatch, self.gap_open, self.gap_extend)
+            # vH1/vE1 end up holding row ymid: its scores, and the vertical gaps that end in it
+            sgcol32(strided, &d[sy], stride, ymid, vH1, vE1,
+                    self.match, self.mismatch, self.gap_open, self.gap_extend, open_tb)
 
-            vH1: cython.pointer(__m256i) = pvHStore if ymid & 1 else pvHLoad
-            vE1: cython.pointer(__m256i) = pvELoad  if ymid & 1 else pvEStore
-
-            sgcol32(rstrided, &dr[ld - sy - ly],
-                    stride, ly - ymid,
-                    pvHLoad2, pvHStore2, pvELoad2, pvEStore2,
-                    self.match, self.mismatch, self.gap_open, self.gap_extend)
-
-            vH2: cython.pointer(__m256i) = pvHStore2 if (ly - ymid) & 1 else pvHLoad2
-            vE2: cython.pointer(__m256i) = pvELoad2  if (ly - ymid) & 1 else pvEStore2
-
-            idx: int32_t = maxsum32(vH1, vH2, stride)
-            idx2: int32_t = maxsum32(vE1, vE2, stride)
+            sgcol32(rstrided, &dr[ld - sy - ly], stride, ly - ymid, vH2, vE2,
+                    self.match, self.mismatch, self.gap_open, self.gap_extend, open_te)
 
             H1: cython.pointer(int32_t) = <int32_t *> vH1
-            H2: cython.pointer(int32_t) = <int32_t *> vH2
             E1: cython.pointer(int32_t) = <int32_t *> vE1
+            H2: cython.pointer(int32_t) = <int32_t *> vH2
+            E2: cython.pointer(int32_t) = <int32_t *> vE2
+            vsums: cython.pointer(vec) = <vec *> self.allocator.alloc(bufsize)
+            sums: cython.pointer(int32_t) = <int32_t *> vsums
+            below = ly - ymid
+            down_left = 0 if ymid == 0 else open_tb + (ymid - 1) * self.gap_extend
+            down_right = 0 if below == 0 else open_te + (below - 1) * self.gap_extend
+            NEGV = -(1 << 40)
+            last = _striped(lx - 1, stride)
 
-            # stupid boundary conditions
-            H: int32_t = H1[idx]
-            xmid: int64_t = idx / 8 + idx % 8 * stride + 1
-            nkind = 0
+            best_cross = pairmax32(vH1, vH2, vsums, stride, aligned - lx, 0)
+            cross = sums[best_cross] if lx >= 2 else NEGV; x_cross = _unstriped(best_cross, stride) + 1
+            for cand, cx in ((down_left + H2[last], 0), (H1[last] + down_right, lx)):  # x = 0 and x = lx
+                if cand > cross: cross = cand; x_cross = cx
 
-            if H < (t := H2[aligned-1] + self.gap_open + (ymid-1)*self.gap_extend):
-                # print("START")
-                H = t
-                xmid = 0
-            if H < (t := H1[aligned-1] + self.gap_open + (ly-ymid-1)*self.gap_extend):
-                # print("END")
-                H = t
-                xmid = lx
-            # this code path is annoying to debug
-            if H < E1[idx2] - self.gap_open:
-                xmid = idx2 / 8 + idx2 % 8 * stride + 1
-                nkind = 1
+            best_gap = pairmax32(vE1, vE2, vsums, stride, aligned - lx, self.gap_extend - self.gap_open)
+            gap = sums[best_gap] if lx >= 2 else NEGV; x_gap = _unstriped(best_gap, stride) + 1
+            dd0 = down_left if ymid >= 1 else NEGV
+            ssl = down_right if below >= 1 else NEGV
+            for cand, cx in ((dd0 + E2[last] - self.gap_open + self.gap_extend, 0),
+                             (E1[last] + ssl - self.gap_open + self.gap_extend, lx)):
+                if cand > gap: gap = cand; x_gap = cx
 
+            in_gap = gap > cross
+            xmid, H = (x_gap, gap) if in_gap else (x_cross, cross)
+            if root: score = H
+            root = False
             xmid = min(xmid, lx)
 
-            if nkind == 0:
-                nodes.append((sx, xmid, sy, ymid, kind))
-                nodes.append((sx+xmid, lx-xmid, sy+ymid, ly-ymid, 0))
+            if not in_gap:
+                nodes.append((sx, xmid, sy, ymid, tb, 0))
+                nodes.append((sx+xmid, lx-xmid, sy+ymid, ly-ymid, 0, te))
             else:
-                nodes.append((sx, xmid, sy, ymid-1, kind))
-                nodes.append((sx+xmid, lx-xmid, sy+ymid+1, ly-ymid-1, 1))
+                nodes.append((sx, xmid, sy, ymid-1, tb, 1))
+                nodes.append((sx+xmid, lx-xmid, sy+ymid+1, ly-ymid-1, 1, te))
 
             self.allocator.restore()
 

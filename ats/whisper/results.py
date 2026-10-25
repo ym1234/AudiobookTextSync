@@ -23,6 +23,7 @@ class ChapterTranscript:
 
 @dataclass
 class Transcript:
+    title: str # the audio file's, like a CachedTranscript's
     model: str
     at: datetime
     confidence: float

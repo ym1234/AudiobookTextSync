@@ -271,8 +271,8 @@ def main():
         model = load_backend(**asdict(from_args(ModelOptions, args)))
         print(f"Using device: {model.device} with {model.compute_type} compute.")
 
-        transcripts = Transcriber(model).transcribe(cacheless_streams, from_args(TranscribeOptions, args), from_args(DecodeOptions, args))
-        for r, t in zip(cacheless_streams, transcripts):
+        transcribed = Transcriber(model).transcribe(cacheless_streams, from_args(TranscribeOptions, args), from_args(DecodeOptions, args))
+        for r, t in zip(cacheless_streams, transcribed):
             cache.put(r, t)
             transcripts.append(dict(**r, transcript=t))
 

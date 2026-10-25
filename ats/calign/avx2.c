@@ -89,7 +89,7 @@ banded_striped_epi8_seqalign_piecex_row_cal_FPenetration_codes(i32 W, __m256i f,
   _mm256_store_si256((__m256i *)fs, f);
   fs[0] = I8_MIN;
   int s = W * gape + fs[0] - (ubegs[0][1] - ubegs[0][0]);
-  for (int i = 2; i < WORDSIZE; i++) {
+  for (int i = i; i < WORDSIZE; i++) {
     if (fs[i] < s)
       fs[i] = s;
     s = W * gape + fs[i] - (ubegs[0][i + 1] - ubegs[0][i]);
