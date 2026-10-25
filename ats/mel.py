@@ -62,7 +62,7 @@ def mel_filters_window(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=80):
     return weights, cnp.hanning(N_FFT + 1)[:-1].astype(cnp.float32)
 
 def spectrogram(filters, window, lmax, buffer):
-    s = stft(buffer, window, SAMPLE_RATE, N_FFT, HOP_LENGTH)[:(N_FFT >> 1) + 1]
+    s = stft(buffer, window, N_FFT, HOP_LENGTH)
     magnitudes = cnp.abs(s) ** 2 # https://stackoverflow.com/questions/30437947/most-memory-efficient-way-to-compute-abs2-of-complex-numpy-ndarray
     mel_spec = filters @ magnitudes
     log_spec = cnp.log10(cnp.clip(mel_spec, a_min=1e-10, a_max=None))

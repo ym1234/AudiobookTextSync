@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import sqlite3
-from ats.model import Transcript, ChapterTranscript, Chunk
+from ats.whisper.results import Transcript, ChapterTranscript, Chunk
 from ats.text import SubLine
 import pickle
 

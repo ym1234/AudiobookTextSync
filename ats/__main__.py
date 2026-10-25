@@ -175,7 +175,8 @@ def main():
 
     from ats.text import TextFile
     from ats.audio import Container
-    from ats.model import available_models, Model
+    from ats.whisper import Transcriber
+    from ats.whisper.ct2 import Ct2Backend, available_models
     from ats.cache import Cache
 
     from functools import partialmethod
@@ -289,10 +290,10 @@ def main():
         print("--audio option with neither a file nor a cache entry attached")
 
     if len(cacheless_streams):
-        model = Model(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
+        model = Ct2Backend(**{a.dest: getattr(args, a.dest) for a in model_group._group_actions})
         print(f"Using device: {model.device} with {model.compute_type} compute.")
 
-        transcripts = model.transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
+        transcripts = Transcriber(model).transcribe(cacheless_streams, **{a.dest: getattr(args, a.dest) for a in transcription_group._group_actions})
         for r, t in zip(cacheless_streams, transcripts):
             cache.put(r, t)
             transcripts.append(dict(**r, transcript=t))

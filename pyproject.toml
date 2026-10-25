@@ -29,6 +29,7 @@ dependencies = [
     "huggingface-hub",
     "tokenizers>=0.23.1",
     "ctranslate2>=4.8.1",
+    "threadpoolctl>=3.5",
 ]
 
 [project.optional-dependencies]
