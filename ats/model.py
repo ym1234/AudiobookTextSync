@@ -1,11 +1,12 @@
 import os
-from queue import Queue
+import string
+from queue import Queue, Empty
 import multiprocessing
 import huggingface_hub
 import tokenizers
 import numpy as np
 from typing import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from itertools import chain
 from ats.text import SubLine
@@ -92,6 +93,8 @@ class Tokenizer:
     def timestamp_begin(self) -> int: return self.no_timestamps + 1
 
     def token_to_id(self, token): return self.tokenizer.token_to_id(token)
+    def id_to_token(self, id): return self.tokenizer.id_to_token(id)
+    def language_code(self, language_id): return None if language_id is None else self.id_to_token(language_id)[2:-2] # TODO add guards for the token range
     def encode(self, text: str): return self.tokenizer.encode(text, add_special_tokens=False).ids
 
     def decode(self, tokens): return self.tokenizer.decode(tokens)
@@ -164,6 +167,17 @@ class _TranscriptionState:
     bar: tqdm
     language: int
     done: bool
+    window: any = None
+
+@dataclass
+class _Window:
+    encoded: any
+    attempt: int = 0
+    accepted: bool = False
+    no_speech: float = 0.
+    cands: list = field(default_factory=list)
+
+_MEL_LOOKAHEAD = 2
 
 @dataclass
 class Chunk:
@@ -207,62 +221,47 @@ class Model:
     def compute_type(self): return self.model.compute_type
     @property
     def n_mels(self): return self.model.n_mels
+    @property
+    def is_multilingual(self): return self.model.is_multilingual
+
+    def _language_token(self, req, stream, use_stream_language):
+        if not self.is_multilingual:
+            return self.tokenizer.token_to_id("<|en|>")
+        code = req.get('language') or (stream.language if use_stream_language else None)
+        return self.tokenizer.token_to_id(f"<|{code}|>") if code is not None else None
 
     def encode(self, features):
-        to_cpu = self.model.device == "cuda" and len(self.model.device_index) > 1
-        features = cnp.ascontiguousarray(features)
-        features = StorageView.from_array(features.astype(cnp.float32))
-        return self.model.encode(features, to_cpu=to_cpu)
+        features = StorageView.from_array(cnp.ascontiguousarray(features).astype(cnp.float32))
+        return np.asarray(self.model.encode(features, to_cpu=True)) # TODO, make it always live on the gpu. For now we can't do that with cupy
 
-    def generate_with_fallback(self, encoded, languages, temperatures, beam_size, patience, num_hypotheses, length_penalty,
-                               logprob_threshold, nospeech_threshold, **model_args):
-        batch_size = encoded.shape[0]
+    def detect_language(self, encoded):
+        return [self.tokenizer.token_to_id(r[0][0]) for r in self.model.detect_language(StorageView.from_array(encoded))]
 
-        no_speech = [0]*batch_size
-        cands = [[] for _ in range(batch_size)]
-
-        prompts = [[self.tokenizer.sot, l, self.tokenizer.transcribe] for l in languages]
-        needs_fallback = [True]*batch_size
-        for i, t in enumerate(temperatures):
-            # beam size alone is trash
-            if t > 0:
-                decode_args = dict(beam_size=1, sampling_temperature=t, num_hypotheses=num_hypotheses)
-            else:
-                decode_args = dict(beam_size=beam_size, patience=patience)
-            # if i != 0:
-            #     tqdm.write(f"DECODING FAILED!! {i}")
-            rs = self.model.generate(encoded, prompts, return_scores=True, return_no_speech_prob=True,
-                                     length_penalty=0, **decode_args, **model_args)
-            for i, r in enumerate(rs):
-                no_speech[i] = r.no_speech_prob
-                for j, k in enumerate(r.sequences_ids):
-                    if k[-1] < self.tokenizer.timestamp_begin or k[-1] >= self.tokenizer.timestamp_begin + 1500: # only well formed sequences
-                        continue
-                    avg_logprob = r.scores[j] / (len(k)+1)
-                    needs_fallback[i] &= avg_logprob < logprob_threshold and no_speech[i] < nospeech_threshold
-                    if avg_logprob > logprob_threshold:
-                        cands[i].append((k, r.scores[j], no_speech[i], t))
-
-            if all(not k for k in needs_fallback):
-                break
-
-        def gnmt(x): return x[1] / ((5 + len(x[0])) / 6)**length_penalty
-        def norm(x): return x[1] / len(x[0])
-        penalty = norm if length_penalty is None else gnmt
-        return [sorted(c, key=penalty)[-1] if c else ([], -1, no_speech[i], -1) for c in cands]
+    def generate(self, encoded, prompts, temperature, beam_size, patience, num_hypotheses, **model_args):
+        # beam size alone is trash, and it only makes sense at temperature zero. the temperature always has to be
+        # passed because ct2 only uses its greedy sampler at temperature 0 or topk 1, and otherwise samples, beam search
+        # included, at its default temperature of 1
+        args = dict(beam_size=beam_size, patience=patience) if temperature == 0 else \
+               dict(beam_size=1, num_hypotheses=num_hypotheses)
+        stacked = np.stack(encoded) # from_array doesn't take ownership, so this has to outlive the call
+        return self.model.generate(StorageView.from_array(stacked), prompts, return_scores=True,
+                                   return_no_speech_prob=True, length_penalty=0, sampling_temperature=temperature,
+                                   **args, **model_args)
 
     def transcribe(self, requests, num_chunks, batch_size, use_stream_language=False, **model_args):
+        if not self.is_multilingual and (use_stream_language or any(r.get('language') for r in requests)):
+            raise ValueError("--language/--use-stream-language don't apply to English-only (.en) models")
+
         jobs = []
         for r in requests:
             file = r['file']
             stream = file[r['stream']] if 'stream' in r else file[file.default_stream]
-            language = r['language'] if 'language' in r else stream.language if use_stream_language else None
-            language = self.tokenizer.token_to_id("<|" + language + "|>") if language is not None else None  # gets filled in later by whisper
+            language = self._language_token(r, stream, use_stream_language)
             for c in file.chapters:
                 ignore = r.get('ignore', {})
                 if str(c.id) in ignore or c.title in ignore:
                     continue
-                jobs.append(dict(path=file.path, stream=stream.idx, language=language, chapter=c, queue=Queue(maxsize=1)))
+                jobs.append(dict(path=file.path, stream=stream.idx, language=language, chapter=c, queue=Queue(maxsize=_MEL_LOOKAHEAD)))
 
         results = self._transcribe(jobs, num_chunks, batch_size, **model_args)
         idx = [0] + np.cumsum([len(r['file'].chapters) for r in requests], dtype=int).tolist()
@@ -275,7 +274,8 @@ class Model:
         return [Transcript(model=self.model_name, at=datetime.now(), confidence=confidence(grouped[i]), chapters=grouped[i])
                 for i in range(len(requests))]
 
-    def _transcribe(self, jobs, num_chunks, batch_size, **model_args):
+    def _transcribe(self, jobs, num_chunks, batch_size, temperatures, beam_size, patience, num_hypotheses,
+                    length_penalty, logprob_threshold, nospeech_threshold, **model_args):
         main_bar = tqdm(total=len(jobs), desc="Transcribing", position=0,
                         bar_format="{l_bar}{bar}{n:3.2f}/{total:3.2f} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
                         leave=True)
@@ -285,7 +285,10 @@ class Model:
 
         mel_queue = Queue()
         for k in jobs_sorted: mel_queue.put(jobs[k])
-        mel_workers = [MelWorker(mel_queue, n_mels=self.n_mels, num_chunks=num_chunks) for _ in range(multiprocessing.cpu_count())]
+        # one worker per slot at least: a worker sees a chapter through to its end, so with fewer of them than
+        # slots the extra slots have no producer and sit empty until some chapter finishes and frees one up
+        num_workers = min(len(jobs), max(batch_size, multiprocessing.cpu_count()))
+        mel_workers = [MelWorker(mel_queue, n_mels=self.n_mels, num_chunks=num_chunks) for _ in range(num_workers)]
         # mel_queue.shutdown() # This is pretty new
         for _ in mel_workers: mel_queue.put(None) # poison value
         for w in mel_workers: w.start()
@@ -294,7 +297,8 @@ class Model:
         def finalize_transcript(active):
             idx = active.idx
             chapter = jobs[idx]['chapter']
-            results[idx] = ChapterTranscript(title=chapter.title, start=chapter.start, end=chapter.end, language=jobs[idx]['language'],
+            results[idx] = ChapterTranscript(title=chapter.title, start=chapter.start, end=chapter.end,
+                                             language=self.tokenizer.language_code(active.language),
                                              chunks=active.chunks, segments=active.lines)
             active.bar.close()
             main_bar.update((chapter.end - chapter.start)/total_length * len(jobs))
@@ -305,6 +309,39 @@ class Model:
             bar = tqdm(total=chapter.end-chapter.start, unit_scale=True, unit=" seconds", desc=chapter.title)
             return _TranscriptionState(idx=idx, buffer=cnp.zeros((self.n_mels, 0)), lines=[], chunks=[],
                                        seek=0, bar=bar, language=jobs[idx]['language'], done=False)
+        def gnmt(x): return x[1] / ((5 + len(x[0])) / 6)**length_penalty
+        def norm(x): return x[1] / len(x[0])
+        penalty = norm if length_penalty is None else gnmt
+        ts_begin = self.tokenizer.timestamp_begin
+
+        def decode(streams, temperature):
+            prompts = [[self.tokenizer.sot, a.language, self.tokenizer.transcribe] if self.is_multilingual
+                       else [self.tokenizer.sot] for a in streams]
+            rs = self.generate([a.window.encoded for a in streams], prompts, temperature,
+                               beam_size, patience, num_hypotheses, **model_args)
+            for a, r in zip(streams, rs):
+                w = a.window
+                w.no_speech, w.attempt = r.no_speech_prob, w.attempt + 1
+                for j, k in enumerate(r.sequences_ids):
+                    if not k or k[-1] < ts_begin or k[-1] >= ts_begin + 1500: # only well formed sequences
+                        continue
+                    avg_logprob = r.scores[j] / (len(k)+1)
+                    if not (avg_logprob < logprob_threshold and w.no_speech < nospeech_threshold):
+                        w.accepted = True
+                    if avg_logprob > logprob_threshold:
+                        w.cands.append((k, r.scores[j], w.no_speech, temperature))
+
+        def refill(a, block=False):
+            got = False
+            while not a.done and a.buffer.shape[-1] < 3000:
+                try:
+                    buf, end = jobs[a.idx]['queue'].get(timeout=0.05) if block else jobs[a.idx]['queue'].get_nowait()
+                except Empty:
+                    return got
+                a.buffer = cnp.concatenate((a.buffer, buf), axis=-1)
+                a.done, got, block = a.done or end, True, False
+            return got
+
         active, pending = [], 0
         for i in range(min(len(jobs), batch_size)):
             active.append(new_active(i))
@@ -312,37 +349,51 @@ class Model:
 
         while True:
             i = 0
-            while i < len(active):
+            while i < len(active): # a chapter with nothing left hands its slot to the next one in the queue
                 a = active[i]
-                if not a.done and a.buffer.shape[-1] < 3000:
-                    buf, end = jobs[a.idx]['queue'].get()
-                    a.buffer = cnp.concatenate((a.buffer, buf), axis=-1)
-                    if end: a.done = True
-                elif a.buffer.shape[-1] == 0:
+                if a.done and a.buffer.shape[-1] == 0:
                     finalize_transcript(a)
                     if pending < len(jobs):
                         active[i] = new_active(pending)
                         pending += 1
                     else:
                         active.pop(i)
-                    i -= 1 # lol hacky
+                        continue
                 i += 1
 
             if not len(active):
                 break
 
-            padded = [cnp.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
-                    for a in active]
-            encoded = self.encode(cnp.stack(padded))
+            for a in active: refill(a)
+            ready = [a for a in active if a.buffer.shape[-1] and (a.done or a.buffer.shape[-1] >= 3000)]
+            if not ready:
+                for a in active:
+                    if refill(a, block=True): break
+                continue
 
-            if any(a.language is None for a in active):
-                r = self.model.detect_language(encoded)
-                for i, a in enumerate(active):
-                    a.language = self.tokenizer.token_to_id(r[i][0][0])
+            # a stream retrying a failed window already has its encoder output, only the new windows need encoding
+            fresh = [a for a in ready if a.window is None]
+            if fresh:
+                padded = [cnp.pad(a.buffer[:, :3000], [(0, 0), (0, max(0, int(3000 - a.buffer.shape[-1])))])
+                          for a in fresh]
+                encoded = self.encode(cnp.stack(padded))
+                for i, a in enumerate(fresh): a.window = _Window(encoded[i])
 
-            rs = self.generate_with_fallback(encoded, [a.language for a in active], **model_args)
-            for i, a in enumerate(active):
-                tokens, score, no_speech, temperature = rs[i]
+                assert self.is_multilingual or all(a.language is not None for a in fresh), "english-only streams start with <|en|>"
+                undetected = [a for a in fresh if a.language is None]
+                if undetected:
+                    languages = self.detect_language(np.stack([a.window.encoded for a in undetected]))
+                    for a, language in zip(undetected, languages): a.language = language
+
+            # one rung per stream per round, so a window that failed only holds up itself and not the whole batch
+            by_temperature = {}
+            for a in ready: by_temperature.setdefault(temperatures[a.window.attempt], []).append(a)
+            for temperature, streams in by_temperature.items():
+                decode(streams, temperature)
+
+            for a in [a for a in ready if a.window.accepted or a.window.attempt == len(temperatures)]:
+                w, a.window = a.window, None
+                tokens, score, no_speech, temperature = max(w.cands, key=penalty) if w.cands else ([], -1, w.no_speech, -1)
 
                 segments, seek = [], 1500
                 if tokens:

@@ -239,7 +239,7 @@ def main():
     transcription_group.add_argument("--length-penalty", type=float, default=None, help="optional token length penalty coefficient (alpha) as in https://arxiv.org/abs/1609.08144, uses simple length normalization by default")
 
     transcription_group.add_argument("--repetition-penalty", type=float, default=1, help="penalty applied to the score of previously generated tokens")
-    transcription_group.add_argument("--no-repeat-ngram-size", type=float, default=0, help="penalty applied to the score of previously generated tokens")
+    transcription_group.add_argument("--no-repeat-ngram-size", type=int, default=0, help="penalty applied to the score of previously generated tokens")
     transcription_group.add_argument("--max-initial-timestamp-index", type=lambda x: int(x)//0.02, default=1500, help="maximum index of the first predicted timestamp")
 
     transcription_group.add_argument("--suppress-blank", default=True, action=argparse.BooleanOptionalAction, help="suppress blank tokens at the start of sampling")

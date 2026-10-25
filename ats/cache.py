@@ -48,8 +48,8 @@ VALUES (:filename, :title, :stream, :model, :confidence, :date) RETURNING id;
 """
 
 _INSERT_CHAPTER_TRANSCRIPT = """
-INSERT INTO chapter_transcript (idx, transcript_id, title, start, end)
-VALUES (:idx, :transcript_id, :title, :start, :end) RETURNING id;
+INSERT INTO chapter_transcript (idx, transcript_id, language, title, start, end)
+VALUES (:idx, :transcript_id, :language, :title, :start, :end) RETURNING id;
 """
 
 _INSERT_CHUNKS = """

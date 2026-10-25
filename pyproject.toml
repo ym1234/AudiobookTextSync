@@ -29,11 +29,13 @@ dependencies = [
     "huggingface-hub",
     "tokenizers>=0.23.1",
     "ctranslate2>=4.8.1",
-    "cupy>=14.1.1",
 ]
 
 [project.optional-dependencies]
 test = ["pytest"]
+# mel on the gpu, only installable on a cuda box. the plain cupy package is source only, this is the prebuilt wheel.
+# ats/np.py falls back to numpy without it
+cuda = ["cupy-cuda12x[ctk]>=14.1.1"]
 
 [project.scripts]
 ats = "ats.__main__:main"
