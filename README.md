@@ -1,36 +1,16 @@
 # AudiobookTextSync
-TODO Video demo here
+Hey! I'll write a detailed README later but for now:
+
+## Installation
+```bash
+uv sync
+# or
+uv sync --extra cuda # for NVIDIA GPUs
+```
+Also needs ffmpeg and a C compiler installed.
 
 ## Usage
+The command line interface is currently in flux while I try to figure out a good way to structure it but for now you can use
+```bash
+uv run ats sync --text fst.epub --text snd.epub --text etc.epub --audio [any number of audio files] --output-dir subs/
 ```
-usage: main.py [-h] --audio AUDIO [AUDIO ...] --text TEXT [TEXT ...] [--model MODEL] [--language LANGUAGE] [--progress | --no-progress]
-               [--overwrite | --no-overwrite] [--use-cache | --no-use-cache] [--cache-dir CACHE_DIR] [--overwrite-cache | --no-overwrite-cache]
-               [--threads THREADS] [--device DEVICE] [--dynamic-quantization | --no-dynamic-quantization | --dq | --no-dq] [--quantize | --no-quantize]
-               [--faster-whisper | --no-faster-whisper] [--fast-decoder | --no-fast-decoder] [--fast-decoder-overlap FAST_DECODER_OVERLAP]
-               [--fast-decoder-batches FAST_DECODER_BATCHES] [--ignore-tags IGNORE_TAGS [IGNORE_TAGS ...]]
-               [--prefix-chapter-name | --no-prefix-chapter-name] [--follow-links | --no-follow-links] [--beam_size BEAM_SIZE] [--patience PATIENCE]
-               [--length_penalty LENGTH_PENALTY] [--suppress_tokens SUPPRESS_TOKENS] [--initial_prompt INITIAL_PROMPT]
-               [--condition_on_previous_text | --no-condition_on_previous_text] [--temperature TEMPERATURE]
-               [--temperature_increment_on_fallback TEMPERATURE_INCREMENT_ON_FALLBACK] [--compression_ratio_threshold COMPRESSION_RATIO_THRESHOLD]
-               [--logprob_threshold LOGPROB_THRESHOLD] [--no_speech_threshold NO_SPEECH_THRESHOLD] [--word_timestamps | --no-word_timestamps]
-               [--prepend_punctuations PREPEND_PUNCTUATIONS] [--append_punctuations APPEND_PUNCTUATIONS] [--nopend_punctuations NOPEND_PUNCTUATIONS]
-               [--highlight_words | --no-highlight_words] [--max_line_width MAX_LINE_WIDTH] [--max_line_count MAX_LINE_COUNT]
-               [--max_words_per_line MAX_WORDS_PER_LINE] [--output-dir OUTPUT_DIR] [--output-format OUTPUT_FORMAT] [--local-only | --no-local-only]
-```
-
-## Install
-AudiobookTextSync needs ffmpeg to be installed.
-
-```
-git clone https://github.com/ym1234/AudiobookTextSync.git
-cd AudiobookTextSync
-pip install -e '.[test]'
-```
-
-To build with ASan/UBSan enabled (for debugging the aligner's C extension), set `ATS_SANITIZE=1`:
-```
-ATS_SANITIZE=1 pip install -e '.[test]' --no-build-isolation
-```
-
-## Credits
-- KanjiEater
