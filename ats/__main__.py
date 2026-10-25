@@ -222,8 +222,8 @@ def main():
     aligner_group = sync_parser.add_argument_group("Aligner options")
     aligner_group.add_argument("--memsize", type=int, default=int(1*1024**3), help="amount of memory to use for alignment (in bytes)")
     aligner_group.add_argument("--match", type=int, default=1, help="")
-    aligner_group.add_argument("--mismatch", type=int, default=-1, help="")
-    aligner_group.add_argument("--gap-open", type=int, default=-1, help="")
+    aligner_group.add_argument("--mismatch", type=int, default=-2, help="")
+    aligner_group.add_argument("--gap-open", type=int, default=-2, help="")
     aligner_group.add_argument("--gap-extend", type=int, default=-1, help="")
 
     add_arguments(sync_parser.add_argument_group("Transcription options"), TranscribeOptions)
